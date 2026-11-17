@@ -41,34 +41,31 @@ const invalidSecret = (name: string): Config.ConfigError =>
     )
   )
 
-const unreadableSecret = (name: string): Config.ConfigError =>
-  new Config.ConfigError(new ConfigProvider.SourceError({ message: `Could not read secret key ${name}` }))
+const secretError = (name: string, problem: "Missing" | "Invalid"): Config.ConfigError =>
+  new Config.ConfigError(
+    new Schema.SchemaError(
+      new SchemaIssue.Pointer(
+        [name],
+        new SchemaIssue.InvalidValue({ message: `${problem} value for secret key ${name}` })
+      )
+    )
+  )
 
 /**
- * Secret keys decode straight into `Redacted`. If decoding fails while a
- * value is present, the original issue is replaced by one that carries no
- * input, so neither a schema's own message nor the issue object can expose
- * the secret. A missing value keeps its original schema error, which has no
- * value. A provider (source) error is replaced too, because its message comes
- * from the provider and could contain anything.
- * If the presence check itself fails, the key is treated as present so no
- * provider error can surface in its place.
+ * Secret keys decode straight into `Redacted`. When that fails, the original
+ * error is always discarded and a fresh one is built that names only the key,
+ * so no schema message, issue input or provider text can expose the secret.
+ * A second read only picks the wording (missing or invalid); because nothing
+ * from either read is kept, a provider that answers differently each time
+ * cannot make a secret leak.
  */
 const secretConfig = (key: KeyDefinition): Config.Config<unknown> =>
   Config.orElse(
     Config.schema(Schema.Redacted(key.schema), key.name),
-    (error) =>
+    () =>
       Config.option(Config.schema(Schema.String, key.name)).pipe(
         Config.orElse(() => Config.succeed(Option.some(""))),
-        Config.mapEffect((raw) =>
-          Effect.fail(
-            Option.isNone(raw)
-              // Absent value: keep a schema error (it has no input to leak);
-              // replace a provider error, whose text the provider controls.
-              ? Schema.isSchemaError(error.cause) ? error : unreadableSecret(key.name)
-              : invalidSecret(key.name)
-          )
-        )
+        Config.mapEffect((raw) => Effect.fail(secretError(key.name, Option.isNone(raw) ? "Missing" : "Invalid")))
       )
   )
 

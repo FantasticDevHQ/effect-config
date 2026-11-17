@@ -93,6 +93,27 @@ describe("makeConfig", () => {
       expect(JSON.stringify(error)).not.toContain("sk_live_123")
     }))
 
+  it.effect("keeps nothing from the first read when the provider changes its answer", () =>
+    Effect.gen(function*() {
+      const leaky = defineKeys([{
+        name: "TOKEN",
+        schema: Schema.String.check(Schema.makeFilter((value) => value.startsWith("tok_") || `bad token ${value}`)),
+        required: true,
+        secret: true,
+        consumers: []
+      }])
+      let reads = 0
+      // The first read returns a rejected value; the re-read says the key is absent.
+      const flaky = ConfigProvider.make(() =>
+        Effect.succeed(reads++ === 0 ? ConfigProvider.makeValue("sk_live_123") : undefined)
+      )
+      const error = yield* Effect.flip(makeConfig(leaky).parse(flaky))
+      expect(reads).toBe(2)
+      expect(error.message).toContain("Missing value for secret key TOKEN")
+      expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
+      expect(JSON.stringify(error)).not.toContain("sk_live_123")
+    }))
+
   it.effect("does not echo an invalid secret value in the error", () =>
     Effect.gen(function*() {
       const error = yield* Effect.flip(
