@@ -41,11 +41,16 @@ const invalidSecret = (name: string): Config.ConfigError =>
     )
   )
 
+const unreadableSecret = (name: string): Config.ConfigError =>
+  new Config.ConfigError(new ConfigProvider.SourceError({ message: `Could not read secret key ${name}` }))
+
 /**
  * Secret keys decode straight into `Redacted`. If decoding fails while a
  * value is present, the original issue is replaced by one that carries no
  * input, so neither a schema's own message nor the issue object can expose
- * the secret. A missing value keeps its original error, which has no value.
+ * the secret. A missing value keeps its original schema error, which has no
+ * value. A provider (source) error is replaced too, because its message comes
+ * from the provider and could contain anything.
  * If the presence check itself fails, the key is treated as present so no
  * provider error can surface in its place.
  */
@@ -55,7 +60,15 @@ const secretConfig = (key: KeyDefinition): Config.Config<unknown> =>
     (error) =>
       Config.option(Config.schema(Schema.String, key.name)).pipe(
         Config.orElse(() => Config.succeed(Option.some(""))),
-        Config.mapEffect((raw) => Effect.fail(Option.isNone(raw) ? error : invalidSecret(key.name)))
+        Config.mapEffect((raw) =>
+          Effect.fail(
+            Option.isNone(raw)
+              // Absent value: keep a schema error (it has no input to leak);
+              // replace a provider error, whose text the provider controls.
+              ? Schema.isSchemaError(error.cause) ? error : unreadableSecret(key.name)
+              : invalidSecret(key.name)
+          )
+        )
       )
   )
 

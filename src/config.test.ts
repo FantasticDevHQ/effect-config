@@ -76,6 +76,23 @@ describe("makeConfig", () => {
       expect(missing.message).toContain("TOKEN")
     }))
 
+  it.effect("does not pass through a provider error for a secret key", () =>
+    Effect.gen(function*() {
+      let reads = 0
+      // First read fails with provider text that contains the secret; the
+      // presence re-read then reports the key as absent.
+      const leakyProvider = ConfigProvider.make(() =>
+        reads++ === 0
+          ? Effect.fail(new ConfigProvider.SourceError({ message: "upstream said sk_live_123" }))
+          : Effect.succeed(undefined)
+      )
+      const error = yield* Effect.flip(keyConfig(keys, "API_KEY").parse(leakyProvider))
+      expect(reads).toBe(2)
+      expect(error.message).toContain("API_KEY")
+      expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
+      expect(JSON.stringify(error)).not.toContain("sk_live_123")
+    }))
+
   it.effect("does not echo an invalid secret value in the error", () =>
     Effect.gen(function*() {
       const error = yield* Effect.flip(
