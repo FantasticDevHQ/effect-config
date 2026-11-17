@@ -41,46 +41,45 @@ const invalidSecret = (name: string): Config.ConfigError =>
     )
   )
 
-const secretError = (name: string, problem: "Missing" | "Invalid"): Config.ConfigError =>
+type SecretProblem = "Missing value for" | "Invalid value for" | "Could not read"
+
+const secretError = (name: string, problem: SecretProblem): Config.ConfigError =>
   new Config.ConfigError(
     new Schema.SchemaError(
-      new SchemaIssue.Pointer(
-        [name],
-        new SchemaIssue.InvalidValue({ message: `${problem} value for secret key ${name}` })
-      )
+      new SchemaIssue.Pointer([name], new SchemaIssue.InvalidValue({ message: `${problem} secret key ${name}` }))
     )
   )
 
+const failWith = (error: Config.ConfigError): Config.Config<never> =>
+  Config.mapEffect(Config.succeed(undefined), () => Effect.fail(error))
+
 /**
- * Secret keys decode straight into `Redacted`. When decoding fails, the
- * original error is always discarded and a fresh one is built that names only
- * the key, so no schema message, issue input or provider text can expose the
- * secret. A second read only picks the wording (missing or invalid); because
- * nothing from either read is kept, a provider that answers differently each
- * time cannot make a secret leak. An absent optional secret loads as `None`.
+ * Loads a secret key with exactly one read of the active provider.
+ *
+ * - Absent: `None` for an optional key, a "missing" error for a required one.
+ * - Provider failure: a "could not read" error, never `None`.
+ * - Present: the raw string is decoded with the key's schema against a
+ *   private in-memory provider, so decoding matches `Config.schema`, and the
+ *   result is `Redacted`. A decode failure becomes an "invalid" error.
+ *
+ * Every error is built from scratch and names only the key, so no schema
+ * message, issue input or provider text can expose the secret.
  */
 const secretConfig = (key: KeyDefinition): Config.Config<unknown> => {
-  const loaded: Config.Config<Option.Option<unknown>> = Config.orElse(
-    Config.option(Config.schema(Schema.Redacted(key.schema), key.name)),
-    () =>
-      Config.option(Config.schema(Schema.String, key.name)).pipe(
-        Config.orElse(() => Config.succeed(Option.some(""))),
-        Config.mapEffect((raw) =>
-          Option.isNone(raw) && !key.required
-            ? Effect.succeed(Option.none())
-            : Effect.fail(secretError(key.name, Option.isNone(raw) ? "Missing" : "Invalid"))
-        )
-      )
+  const raw = Config.orElse(
+    Config.option(Config.schema(Schema.String, key.name)),
+    () => failWith(secretError(key.name, "Could not read"))
   )
-  return key.required
-    ? Config.mapEffect(
-      loaded,
-      Option.match({
-        onNone: () => Effect.fail(secretError(key.name, "Missing")),
-        onSome: Effect.succeed
-      })
+  const decode = Config.schema(Schema.Redacted(key.schema), key.name)
+  return Config.mapEffect(raw, (value): Effect.Effect<unknown, Config.ConfigError> => {
+    if (Option.isNone(value)) {
+      return key.required ? Effect.fail(secretError(key.name, "Missing value for")) : Effect.succeedNone
+    }
+    const decoded = decode.parse(ConfigProvider.fromUnknown({ [key.name]: value.value })).pipe(
+      Effect.mapError(() => secretError(key.name, "Invalid value for"))
     )
-    : loaded
+    return key.required ? decoded : Effect.asSome(decoded)
+  })
 }
 
 const keyToConfig = (key: KeyDefinition): Config.Config<unknown> => {

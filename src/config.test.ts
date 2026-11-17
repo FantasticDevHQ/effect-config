@@ -91,37 +91,51 @@ describe("makeConfig", () => {
   it.effect("does not pass through a provider error for a secret key", () =>
     Effect.gen(function*() {
       let reads = 0
-      // First read fails with provider text that contains the secret; the
-      // presence re-read then reports the key as absent.
-      const leakyProvider = ConfigProvider.make(() =>
-        reads++ === 0
-          ? Effect.fail(new ConfigProvider.SourceError({ message: "upstream said sk_live_123" }))
-          : Effect.succeed(undefined)
-      )
-      const error = yield* Effect.flip(keyConfig(keys, "API_KEY").parse(leakyProvider))
-      expect(reads).toBe(2)
-      expect(error.message).toContain("API_KEY")
+      const failing = ConfigProvider.make(() => {
+        reads++
+        return Effect.fail(new ConfigProvider.SourceError({ message: "upstream said sk_live_123" }))
+      })
+      const error = yield* Effect.flip(keyConfig(keys, "API_KEY").parse(failing))
+      expect(reads).toBe(1)
+      expect(error.message).toContain("Could not read secret key API_KEY")
       expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
       expect(JSON.stringify(error)).not.toContain("sk_live_123")
     }))
 
-  it.effect("keeps nothing from the first read when the provider changes its answer", () =>
+  it.effect("does not load an optional secret as None when the provider fails", () =>
+    Effect.gen(function*() {
+      const optionalSecret = defineKeys([
+        { name: "TOKEN", schema: Schema.String, required: false, secret: true, consumers: [] }
+      ])
+      let reads = 0
+      // Fails first, then would report absence if asked again.
+      const flaky = ConfigProvider.make(() =>
+        reads++ === 0
+          ? Effect.fail(new ConfigProvider.SourceError({ message: "upstream unavailable" }))
+          : Effect.undefined
+      )
+      const error = yield* Effect.flip(makeConfig(optionalSecret).parse(flaky))
+      expect(reads).toBe(1)
+      expect(error.message).toContain("Could not read secret key TOKEN")
+    }))
+
+  it.effect("reads a secret key from the provider exactly once", () =>
     Effect.gen(function*() {
       const leaky = defineKeys([{
         name: "TOKEN",
         schema: Schema.String.check(Schema.makeFilter((value) => value.startsWith("tok_") || `bad token ${value}`)),
-        required: true,
+        required: false,
         secret: true,
         consumers: []
       }])
       let reads = 0
-      // The first read returns a rejected value; the re-read says the key is absent.
-      const flaky = ConfigProvider.make(() =>
+      // A rejected value first; absence if the provider were asked again.
+      const changing = ConfigProvider.make(() =>
         Effect.succeed(reads++ === 0 ? ConfigProvider.makeValue("sk_live_123") : undefined)
       )
-      const error = yield* Effect.flip(makeConfig(leaky).parse(flaky))
-      expect(reads).toBe(2)
-      expect(error.message).toContain("Missing value for secret key TOKEN")
+      const error = yield* Effect.flip(makeConfig(leaky).parse(changing))
+      expect(reads).toBe(1)
+      expect(error.message).toContain("Invalid value for secret key TOKEN")
       expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
       expect(JSON.stringify(error)).not.toContain("sk_live_123")
     }))
