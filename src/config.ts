@@ -13,10 +13,15 @@ import type { KeyByName, KeyDefinition, KeyList, KeyName } from "./keys.ts"
  * @since 0.1.0
  * @category models
  */
-export type KeyValue<K extends KeyDefinition> = K["required"] extends true ? SecretAware<K>
+export type KeyValue<K extends KeyDefinition> = boolean extends K["required"] ?
+  // `required` is a widened `boolean`, so either shape can occur at runtime.
+  SecretAware<K> | Option.Option<SecretAware<K>>
+  : K["required"] extends true ? SecretAware<K>
   : Option.Option<SecretAware<K>>
 
-type SecretAware<K extends KeyDefinition> = K["secret"] extends true ? Redacted.Redacted<K["schema"]["Type"]>
+type SecretAware<K extends KeyDefinition> = boolean extends K["secret"] ?
+  K["schema"]["Type"] | Redacted.Redacted<K["schema"]["Type"]>
+  : K["secret"] extends true ? Redacted.Redacted<K["schema"]["Type"]>
   : K["schema"]["Type"]
 
 /**
@@ -41,12 +46,15 @@ const invalidSecret = (name: string): Config.ConfigError =>
  * value is present, the original issue is replaced by one that carries no
  * input, so neither a schema's own message nor the issue object can expose
  * the secret. A missing value keeps its original error, which has no value.
+ * If the presence check itself fails, the key is treated as present so no
+ * provider error can surface in its place.
  */
 const secretConfig = (key: KeyDefinition): Config.Config<unknown> =>
   Config.orElse(
     Config.schema(Schema.Redacted(key.schema), key.name),
     (error) =>
       Config.option(Config.schema(Schema.String, key.name)).pipe(
+        Config.orElse(() => Config.succeed(Option.some(""))),
         Config.mapEffect((raw) => Effect.fail(Option.isNone(raw) ? error : invalidSecret(key.name)))
       )
   )

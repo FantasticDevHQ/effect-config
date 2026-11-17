@@ -75,11 +75,16 @@ export type KeyByName<Keys extends ReadonlyArray<KeyDefinition>, Name extends Ke
 
 const keyNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+// Names that would hit Object.prototype accessors instead of becoming plain
+// properties of the loaded config object.
+const reservedNames: ReadonlySet<string> = new Set(["__proto__"])
+
 /**
  * Declares the configuration key list.
  *
  * Throws at definition time if a name is not a valid environment variable
- * name, is declared twice, or has a non-string consumer. These are programmer
+ * name (or is the reserved `__proto__`), is declared twice, or has a
+ * non-string consumer. These are programmer
  * errors in a static declaration, so they fail fast at module load.
  *
  * @example
@@ -100,7 +105,7 @@ const keyNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/
 export const defineKeys = <const Keys extends ReadonlyArray<KeyDefinition>>(keys: Keys): KeyList<Keys> => {
   const seen = new Set<string>()
   for (const key of keys) {
-    if (!keyNamePattern.test(key.name)) {
+    if (!keyNamePattern.test(key.name) || reservedNames.has(key.name)) {
       throw new TypeError(`effect-config: invalid key name ${JSON.stringify(key.name)}`)
     }
     if (seen.has(key.name)) {

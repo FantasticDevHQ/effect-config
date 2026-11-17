@@ -32,4 +32,9 @@ describe("defineKeys", () => {
     expect(() => defineKeys([{ name: "1-BAD", schema: Schema.String, required: true, secret: false, consumers: [] }]))
       .toThrow("invalid key name")
   })
+
+  it("rejects __proto__, which would not load as a plain property", () => {
+    expect(() => defineKeys([{ name: "__proto__", schema: Schema.String, required: true, secret: false, consumers: [] }]))
+      .toThrow("invalid key name")
+  })
 })
