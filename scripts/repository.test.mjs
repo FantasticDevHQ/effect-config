@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { readdirSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { test } from "node:test"
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
@@ -53,7 +53,7 @@ test("tracked files stay generic", () => {
   const files = execFileSync("git", ["ls-files", "-co", "--exclude-standard"], {
     cwd: new URL("..", import.meta.url),
     encoding: "utf8"
-  }).split("\n").filter((f) => f && !f.endsWith(".svg") && f !== "pnpm-lock.yaml" && f !== "scripts/repository.test.mjs")
+  }).split("\n").filter((f) => f && !f.endsWith(".svg") && f !== "pnpm-lock.yaml" && f !== "scripts/repository.test.mjs" && existsSync(new URL(`../${f}`, import.meta.url)))
   for (const file of files) {
     assert.doesNotMatch(read(file), /tinykit|handiwork/i, `${file} names a private app`)
   }
