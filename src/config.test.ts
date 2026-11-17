@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import { ConfigProvider, Effect, Logger, Option, Redacted } from "effect"
+import { ConfigProvider, Effect, Logger, Option, Redacted, Schema } from "effect"
 import { inspect } from "node:util"
 import { keyConfig, makeConfig } from "./config.ts"
 import { keys } from "./fixtures.ts"
+import { defineKeys } from "./keys.ts"
 
 const provider = (env: Record<string, string>) => ConfigProvider.fromEnv({ env })
 
@@ -52,6 +53,27 @@ describe("makeConfig", () => {
       const error = yield* Effect.flip(makeConfig(keys).parse(provider({ PORT: "1" })))
       expect(error._tag).toBe("ConfigError")
       expect(error.message).toContain("API_KEY")
+    }))
+
+  it.effect("does not echo a rejected secret value, even from a custom schema message", () =>
+    Effect.gen(function*() {
+      const leaky = defineKeys([{
+        name: "TOKEN",
+        schema: Schema.String.check(
+          Schema.makeFilter((value) => value.startsWith("tok_") || `bad token ${value}`)
+        ),
+        required: true,
+        secret: true,
+        consumers: []
+      }])
+      const error = yield* Effect.flip(makeConfig(leaky).parse(provider({ TOKEN: "sk_live_123" })))
+      expect(error.message).toContain("TOKEN")
+      expect(error.message).not.toContain("sk_live_123")
+      expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
+      expect(JSON.stringify(error)).not.toContain("sk_live_123")
+      // A missing secret still reports the key as missing.
+      const missing = yield* Effect.flip(makeConfig(leaky).parse(provider({})))
+      expect(missing.message).toContain("TOKEN")
     }))
 
   it.effect("does not echo an invalid secret value in the error", () =>

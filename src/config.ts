@@ -3,7 +3,7 @@
  *
  * @since 0.1.0
  */
-import { Config, ConfigProvider, type Option, type Redacted, Schema } from "effect"
+import { Config, ConfigProvider, Effect, Option, type Redacted, Schema, SchemaIssue } from "effect"
 import type { KeyByName, KeyDefinition, KeyList, KeyName } from "./keys.ts"
 
 /**
@@ -29,10 +29,30 @@ export type ConfigValues<Keys extends ReadonlyArray<KeyDefinition>> = {
   readonly [K in Keys[number] as K["name"]]: KeyValue<K>
 }
 
+const invalidSecret = (name: string): Config.ConfigError =>
+  new Config.ConfigError(
+    new Schema.SchemaError(
+      new SchemaIssue.Pointer([name], new SchemaIssue.InvalidValue({ message: `Invalid value for secret key ${name}` }))
+    )
+  )
+
+/**
+ * Secret keys decode straight into `Redacted`. If decoding fails while a
+ * value is present, the original issue is replaced by one that carries no
+ * input, so neither a schema's own message nor the issue object can expose
+ * the secret. A missing value keeps its original error, which has no value.
+ */
+const secretConfig = (key: KeyDefinition): Config.Config<unknown> =>
+  Config.orElse(
+    Config.schema(Schema.Redacted(key.schema), key.name),
+    (error) =>
+      Config.option(Config.schema(Schema.String, key.name)).pipe(
+        Config.mapEffect((raw) => Effect.fail(Option.isNone(raw) ? error : invalidSecret(key.name)))
+      )
+  )
+
 const keyToConfig = (key: KeyDefinition): Config.Config<unknown> => {
-  const base = key.secret
-    ? Config.schema(Schema.Redacted(key.schema), key.name)
-    : Config.schema(key.schema, key.name)
+  const base = key.secret ? secretConfig(key) : Config.schema(key.schema, key.name)
   return key.required ? base : Config.option(base)
 }
 
