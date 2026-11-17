@@ -52,25 +52,40 @@ const secretError = (name: string, problem: "Missing" | "Invalid"): Config.Confi
   )
 
 /**
- * Secret keys decode straight into `Redacted`. When that fails, the original
- * error is always discarded and a fresh one is built that names only the key,
- * so no schema message, issue input or provider text can expose the secret.
- * A second read only picks the wording (missing or invalid); because nothing
- * from either read is kept, a provider that answers differently each time
- * cannot make a secret leak.
+ * Secret keys decode straight into `Redacted`. When decoding fails, the
+ * original error is always discarded and a fresh one is built that names only
+ * the key, so no schema message, issue input or provider text can expose the
+ * secret. A second read only picks the wording (missing or invalid); because
+ * nothing from either read is kept, a provider that answers differently each
+ * time cannot make a secret leak. An absent optional secret loads as `None`.
  */
-const secretConfig = (key: KeyDefinition): Config.Config<unknown> =>
-  Config.orElse(
-    Config.schema(Schema.Redacted(key.schema), key.name),
+const secretConfig = (key: KeyDefinition): Config.Config<unknown> => {
+  const loaded: Config.Config<Option.Option<unknown>> = Config.orElse(
+    Config.option(Config.schema(Schema.Redacted(key.schema), key.name)),
     () =>
       Config.option(Config.schema(Schema.String, key.name)).pipe(
         Config.orElse(() => Config.succeed(Option.some(""))),
-        Config.mapEffect((raw) => Effect.fail(secretError(key.name, Option.isNone(raw) ? "Missing" : "Invalid")))
+        Config.mapEffect((raw) =>
+          Option.isNone(raw) && !key.required
+            ? Effect.succeed(Option.none())
+            : Effect.fail(secretError(key.name, Option.isNone(raw) ? "Missing" : "Invalid"))
+        )
       )
   )
+  return key.required
+    ? Config.mapEffect(
+      loaded,
+      Option.match({
+        onNone: () => Effect.fail(secretError(key.name, "Missing")),
+        onSome: Effect.succeed
+      })
+    )
+    : loaded
+}
 
 const keyToConfig = (key: KeyDefinition): Config.Config<unknown> => {
-  const base = key.secret ? secretConfig(key) : Config.schema(key.schema, key.name)
+  if (key.secret) return secretConfig(key)
+  const base = Config.schema(key.schema, key.name)
   return key.required ? base : Config.option(base)
 }
 

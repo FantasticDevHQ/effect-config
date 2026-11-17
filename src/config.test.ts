@@ -24,6 +24,18 @@ describe("makeConfig", () => {
       expect(Option.isNone(config.LOG_LEVEL)).toBe(true)
     }))
 
+  it.effect("loads optional secrets as None when absent and Redacted when present", () =>
+    Effect.gen(function*() {
+      const optionalSecret = defineKeys([
+        { name: "TOKEN", schema: Schema.String, required: false, secret: true, consumers: [] }
+      ])
+      const absent = yield* makeConfig(optionalSecret).parse(provider({}))
+      expect(Option.isNone(absent.TOKEN)).toBe(true)
+      const present = yield* makeConfig(optionalSecret).parse(provider({ TOKEN: "tok_1" }))
+      expect(Option.map(present.TOKEN, Redacted.value)).toEqual(Option.some("tok_1"))
+      expect(String(present.TOKEN)).not.toContain("tok_1")
+    }))
+
   it.effect("reads from the ambient ConfigProvider when yielded", () =>
     Effect.gen(function*() {
       const config = yield* makeConfig(keys)
@@ -131,3 +143,29 @@ describe("keyConfig", () => {
       expect(Redacted.value(apiKey)).toBe("secret")
     }))
 })
+
+describe("load matrix", () => {
+  const cases = [false, true].flatMap((secret) =>
+    [false, true].flatMap((required) =>
+      (["absent", "valid", "invalid"] as const).map((input) => ({ secret, required, input }))
+    )
+  )
+  it.effect.each(cases)("secret=$secret required=$required $input", ({ input, required, secret }) =>
+    Effect.gen(function*() {
+      const list = defineKeys([{ name: "K", schema: Schema.Int, required, secret, consumers: [] }])
+      const env: Record<string, string> = input === "absent" ? {} : { K: input === "valid" ? "42" : "nope" }
+      const result = yield* Effect.result(makeConfig(list).parse(provider(env)))
+      if (input === "invalid" || (input === "absent" && required)) {
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") expect(result.failure.message).toContain("K")
+        return
+      }
+      expect(result._tag).toBe("Success")
+      if (result._tag !== "Success") return
+      const raw: unknown = result.success.K
+      const unwrapped = required ? raw : Option.getOrUndefined(raw as Option.Option<unknown>)
+      if (input === "absent") return expect(Option.isNone(raw as Option.Option<unknown>)).toBe(true)
+      expect(secret ? Redacted.value(unwrapped as Redacted.Redacted<number>) : unwrapped).toBe(42)
+    }))
+})
+
