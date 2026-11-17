@@ -68,10 +68,15 @@ export type KeyName<Keys extends ReadonlyArray<KeyDefinition>> = Keys[number]["n
  * @since 0.1.0
  * @category models
  */
-export type KeyByName<Keys extends ReadonlyArray<KeyDefinition>, Name extends KeyName<Keys>> = Extract<
+export type KeyByName<Keys extends ReadonlyArray<KeyDefinition>, Name extends KeyName<Keys>> = MatchName<
   Keys[number],
-  { readonly name: Name }
+  Name
 >
+
+// Distributes over the definitions. A definition whose `name` is a widened
+// `string` matches any requested name, so the result stays sound (a union)
+// instead of collapsing to `never`.
+type MatchName<K, Name extends string> = K extends KeyDefinition ? Name extends K["name"] ? K : never : never
 
 const keyNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/
 

@@ -29,6 +29,12 @@ describe("makeConfig types", () => {
     >()
   })
 
+  it("a dynamically named key is not typed as never", () => {
+    const setup = (name: string) =>
+      defineKeys([{ name, schema: Schema.String, required: true, secret: false, consumers: [] }])
+    expectTypeOf(keyConfig(setup("K"), "K")).toEqualTypeOf<Config.Config<string>>()
+  })
+
   it("unknown key", () => {
     // @ts-expect-error UNDECLARED_KEY is not in the key list
     const undeclared = keyConfig(keys, "UNDECLARED_KEY")

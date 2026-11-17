@@ -140,6 +140,32 @@ describe("makeConfig", () => {
       expect(JSON.stringify(error)).not.toContain("sk_live_123")
     }))
 
+  it.effect("turns a throwing secret schema into a value-free error", () =>
+    Effect.gen(function*() {
+      const throwing = defineKeys([{
+        name: "TOKEN",
+        schema: Schema.String.check(Schema.makeFilter((value): boolean => {
+          throw new Error(`leaked ${value}`)
+        })),
+        required: true,
+        secret: true,
+        consumers: []
+      }])
+      const exit = yield* Effect.exit(makeConfig(throwing).parse(provider({ TOKEN: "sk_live_123" })))
+      expect(exit._tag).toBe("Failure")
+      expect(inspect(exit, { depth: 30 })).not.toContain("sk_live_123")
+      const error = yield* Effect.flip(makeConfig(throwing).parse(provider({ TOKEN: "sk_live_123" })))
+      expect(error.message).toContain("Invalid value for secret key TOKEN")
+    }))
+
+  it.effect("loads a dynamically named key with the value its type promises", () =>
+    Effect.gen(function*() {
+      const setup = (name: string) =>
+        defineKeys([{ name, schema: Schema.String, required: true, secret: false, consumers: [] }])
+      const value = yield* keyConfig(setup("K"), "K").parse(provider({ K: "actual" }))
+      expect(value).toBe("actual")
+    }))
+
   it.effect("does not echo an invalid secret value in the error", () =>
     Effect.gen(function*() {
       const error = yield* Effect.flip(

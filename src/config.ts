@@ -76,7 +76,9 @@ const secretConfig = (key: KeyDefinition): Config.Config<unknown> => {
       return key.required ? Effect.fail(secretError(key.name, "Missing value for")) : Effect.succeedNone
     }
     const decoded = decode.parse(ConfigProvider.fromUnknown({ [key.name]: value.value })).pipe(
-      Effect.mapError(() => secretError(key.name, "Invalid value for"))
+      // Catch every cause, including a defect thrown by a custom schema,
+      // whose message could contain the input.
+      Effect.catchCause(() => Effect.fail(secretError(key.name, "Invalid value for")))
     )
     return key.required ? decoded : Effect.asSome(decoded)
   })
