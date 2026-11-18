@@ -30,6 +30,7 @@ jobs:
     outputs:
       version: ${{ steps.pack.outputs.version }}
       digest: ${{ steps.pack.outputs.digest }}
+      sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Resolve the release tag
         run: |
@@ -42,24 +43,35 @@ jobs:
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
+      - name: Record the verified commit
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.22.0
           cache: pnpm
-      - name: Tag matches package version
-        run: node scripts/release/tag.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      # Release tooling comes from the workflow's own commit, so recovering an
+      # older tag uses the current scripts. The package source is the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts/release
+          persist-credentials: false
+      - name: Tag matches package version
+        run: node .release-tools/scripts/release/tag.mjs
       - name: Pack and record the content digest
         id: pack
         run: |
           mkdir -p "$RUNNER_TEMP/release"
           npm pack --json --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
-          node scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" | tee -a "$GITHUB_OUTPUT"
-          echo "digest=$(node scripts/release/digest.mjs "$RUNNER_TEMP"/release/*.tgz)" | tee -a "$GITHUB_OUTPUT"
+          node .release-tools/scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" | tee -a "$GITHUB_OUTPUT"
+          echo "digest=$(node .release-tools/scripts/release/digest.mjs "$RUNNER_TEMP"/release/*.tgz)" | tee -a "$GITHUB_OUTPUT"
       - name: Install the tarball in a clean consumer
-        run: node scripts/release/consumer.mjs "$RUNNER_TEMP"/release/*.tgz
+        run: node .release-tools/scripts/release/consumer.mjs "$RUNNER_TEMP"/release/*.tgz
 
   publish:
     name: Publish
@@ -74,10 +86,26 @@ jobs:
     env:
       PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
       VERIFIED_DIGEST: ${{ needs.verify.outputs.digest }}
+      VERIFIED_SHA: ${{ needs.verify.outputs.sha }}
     steps:
+      # Check out the exact commit Verify tested, not the tag name again.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ env.RELEASE_TAG }}
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+      - name: Require the tag to still point at the verified commit
+        run: |
+          TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | cut -f1)
+          test -n "$TAG_SHA" || TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)
+          test "$TAG_SHA" = "$VERIFIED_SHA" || { echo "$RELEASE_TAG now points at ${TAG_SHA:-nothing}, not $VERIFIED_SHA"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$VERIFIED_SHA"
+      # Release tooling comes from the workflow's own commit, so recovering an
+      # older tag uses the current scripts. The package source is the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts/release
           persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -86,9 +114,11 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Require npm trusted publishing support (npm 11.5.1+)
         run: node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
-      - name: Build the tag on this runner
+      # Rebuild the verified commit on the provenance-capable runner. Dependency
+      # lifecycle scripts are skipped because this job can mint an OIDC token.
+      - name: Build the verified commit on this runner
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm build
       - name: Pack and compare with the verified content
         run: |
@@ -96,8 +126,8 @@ jobs:
           npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
           TARBALL=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[0].filename)' "$RUNNER_TEMP/pack.json")
           TARBALL="$RUNNER_TEMP/release/$TARBALL"
-          node scripts/release/digest.mjs "$TARBALL" > "$RUNNER_TEMP/digest.txt"
-          node scripts/release/compare.mjs "$VERIFIED_DIGEST" "$(cat "$RUNNER_TEMP/digest.txt")"
+          node .release-tools/scripts/release/digest.mjs "$TARBALL" > "$RUNNER_TEMP/digest.txt"
+          node .release-tools/scripts/release/compare.mjs "$VERIFIED_DIGEST" "$(cat "$RUNNER_TEMP/digest.txt")"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
           echo "PACK_INTEGRITY=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[0].integrity)' "$RUNNER_TEMP/pack.json")" >> "$GITHUB_ENV"
       # OIDC trusted publishing; no token. No lifecycle scripts run during publish.
@@ -106,7 +136,7 @@ jobs:
           if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             mkdir -p "$RUNNER_TEMP/registry"
             npm pack "$PACKAGE_NAME@$PACKAGE_VERSION" --pack-destination "$RUNNER_TEMP/registry" >/dev/null
-            node scripts/release/compare.mjs "$VERIFIED_DIGEST" "$(node scripts/release/digest.mjs "$RUNNER_TEMP"/registry/*.tgz)" \
+            node .release-tools/scripts/release/compare.mjs "$VERIFIED_DIGEST" "$(node .release-tools/scripts/release/digest.mjs "$RUNNER_TEMP"/registry/*.tgz)" \
               || { echo "$PACKAGE_VERSION is already on npm with different contents"; exit 1; }
             echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published with the verified contents; not publishing again"
           else
@@ -114,7 +144,7 @@ jobs:
             echo "PACKAGE_INTEGRITY=$PACK_INTEGRITY" >> "$GITHUB_ENV"
           fi
       - name: Verify the public version and provenance
-        run: node scripts/release/published.mjs
+        run: node .release-tools/scripts/release/published.mjs
       - name: Create the GitHub release if missing
         env:
           GH_TOKEN: ${{ github.token }}

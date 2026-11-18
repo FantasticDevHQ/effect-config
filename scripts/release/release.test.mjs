@@ -49,11 +49,12 @@ test("Publish builds the tag on its runner and publishes that build only if it m
   const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
   const publish = workflow.slice(workflow.indexOf("\n  publish:"))
   const order = [
-    "ref: refs/tags/${{ env.RELEASE_TAG }}",
-    "pnpm install --frozen-lockfile",
+    "ref: ${{ needs.verify.outputs.sha }}",
+    'test "$TAG_SHA" = "$VERIFIED_SHA"',
+    "pnpm install --frozen-lockfile --ignore-scripts",
     "pnpm build",
     "npm pack --json --ignore-scripts",
-    'node scripts/release/compare.mjs "$VERIFIED_DIGEST"',
+    'node .release-tools/scripts/release/compare.mjs "$VERIFIED_DIGEST"',
     'npm publish "$TARBALL" --provenance --access public --ignore-scripts'
   ].map((step) => {
     const index = publish.indexOf(step)
@@ -62,6 +63,15 @@ test("Publish builds the tag on its runner and publishes that build only if it m
   })
   assert.deepEqual(order, [...order].sort((a, b) => a - b), "steps run in this order")
   assert.doesNotMatch(publish, /download-artifact/, "Publish uses its own build, not the UbiCloud tarball")
+  assert.doesNotMatch(publish, /ref: refs\/tags\//, "Publish checks out the verified SHA, not the tag name")
+})
+
+test("release tooling comes from the workflow commit, after the tag's own checks", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
+  const verify = workflow.slice(workflow.indexOf("\n  verify:"), workflow.indexOf("\n  publish:"))
+  assert.ok(verify.indexOf("run: pnpm check") < verify.indexOf("path: .release-tools"), "tools checkout after pnpm check")
+  assert.equal(workflow.match(/ref: \$\{\{ github\.sha \}\}\n {10}path: \.release-tools/g)?.length, 2)
+  assert.doesNotMatch(workflow, /node scripts\/release\//, "release scripts run from .release-tools")
 })
 
 test("recovery dispatch takes an existing tag and re-checks published contents", () => {

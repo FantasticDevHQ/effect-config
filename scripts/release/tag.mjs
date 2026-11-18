@@ -16,7 +16,9 @@ export function releaseTagErrors(tag, version) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"))
+  // The release source is the current directory (the tag's checkout), which
+  // can differ from where this script lives during a recovery run.
+  const { version } = JSON.parse(readFileSync(`${process.cwd()}/package.json`, "utf8"))
   const errors = releaseTagErrors(process.env.RELEASE_TAG, version)
   for (const error of errors) console.error(error)
   if (errors.length > 0) process.exit(1)
