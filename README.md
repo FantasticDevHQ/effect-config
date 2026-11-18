@@ -8,9 +8,6 @@
 
 <p align="center"><strong>Declare each configuration key once. Read it as typed Effect <code>Config</code>.</strong></p>
 
-> **Status:** pre-release. The API below is being built in the open; the first
-> published version will be `0.1.0`.
-
 ## What it is
 
 `@fantastic.dev/effect-config` is a small library for [Effect](https://effect.website) 4 apps:
@@ -25,7 +22,16 @@
   from Doppler, published on its own subpath so apps that do not use Doppler
   never bundle it.
 
-## Usage
+## Install
+
+```sh
+pnpm add @fantastic.dev/effect-config effect
+```
+
+`effect` (`^4.1.4`) is a peer dependency. To use the Doppler provider, also
+install its optional peer `@distilled.cloud/doppler`.
+
+## Key list
 
 Declare each key once:
 
@@ -61,7 +67,7 @@ const program = Effect.gen(function*() {
 - The values come from the active `ConfigProvider` (environment variables by
   default), so tests can swap in `ConfigProvider.fromUnknown(...)`.
 
-## Drift check
+## Check: drift between the key list and `.env.example`
 
 Fail CI when `.env.example` and the key list disagree:
 
@@ -129,7 +135,8 @@ pnpm install
 pnpm check   # typecheck, tests, build, PR-standard and repository tests
 ```
 
-Pull requests follow the [PR standard](docs/pull-request-standard.md).
+Pull requests follow the [PR standard](docs/pull-request-standard.md). Releases
+follow [docs/releasing.md](docs/releasing.md).
 
 ## License
 
