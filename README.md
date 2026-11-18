@@ -2,34 +2,110 @@
   <a href="https://fantastic.dev"><img src="assets/fantastic-dev-logo.svg" width="80" height="80" alt="Fantastic.Dev" /></a>
 </p>
 
-[A Fantastic.Dev Project](https://fantastic.dev)
-
-<h1 align="center">effect-config</h1>
+<h1 align="center">Effect Config</h1>
 
 <p align="center"><strong>Declare each configuration key once. Read it as typed Effect <code>Config</code>.</strong></p>
 
-## What it is
+<p align="center">A <a href="https://fantastic.dev">Fantastic.Dev</a> Project</p>
 
-`@fantastic.dev/effect-config` is a small library for [Effect](https://effect.website) 4 apps:
+<p align="center">
+  <a href="https://fantastic.dev"><img src="https://img.shields.io/badge/Fantastic.dev-94C173?style=for-the-badge&amp;logoColor=0c0e13" alt="Visit Fantastic.Dev" /></a>
+  <a href="https://github.com/FantasticDevHQ"><img src="https://img.shields.io/badge/GitHub-0c0e13?style=for-the-badge&amp;logo=github&amp;logoColor=white" alt="Fantastic.Dev on GitHub" /></a>
+  <a href="https://www.youtube.com/@FantasticDevHQ"><img src="https://img.shields.io/badge/YouTube-FF0033?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Fantastic.Dev on YouTube" /></a>
+  <a href="https://twitter.com/FantasticDevHQ"><img src="https://img.shields.io/badge/Twitter_%2F_X-0c0e13?style=for-the-badge&amp;logo=x&amp;logoColor=white" alt="Fantastic.Dev on Twitter / X" /></a>
+</p>
 
-- **One key list.** Declare every configuration key with its schema, whether it
-  is required, whether it is secret, and which parts of your system use it.
-- **Effect `Config`.** Turn that list into one typed `Config` value. Secrets come
-  back as `Redacted`.
-- **Drift check.** A CLI command fails CI when `.env.example` and the key list
-  disagree.
-- **Optional Doppler provider.** A `ConfigProvider` that reads only declared keys
-  from Doppler, published on its own subpath so apps that do not use Doppler
-  never bundle it.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@fantastic.dev/effect-config"><img src="https://img.shields.io/npm/v/@fantastic.dev/effect-config?style=flat-square" alt="npm version" /></a>
+  <a href="https://github.com/FantasticDevHQ/effect-config/actions/workflows/check.yml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/FantasticDevHQ/effect-config/check.yml?branch=main&amp;style=flat-square" alt="CI status" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/FantasticDevHQ/effect-config?style=flat-square" alt="License: MIT" /></a>
+</p>
 
-## Install
+<p align="center"><a href="#quick-start">Quick start</a> · <a href="#have-my-agent-set-this-up">Agent setup</a> · <a href="#documentation">Documentation</a></p>
 
-```sh
-pnpm add @fantastic.dev/effect-config effect
+---
+
+Effect Config is a small library for [Effect](https://effect.website) 4 apps. You declare every configuration key once, with its schema, whether it is required, whether it is secret, and which parts of your system use it. That one list then gives you a typed Effect `Config` (secrets come back as `Redacted`), a CLI check that fails CI when `.env.example` drifts, and an optional Doppler `ConfigProvider` that reads only the declared keys.
+
+Use it in an Effect 4 TypeScript app that reads environment variables and wants one source of truth for them.
+
+## Quick start
+
+### Have my agent set this up
+
+Copy this into your coding agent while it is working in your Effect app's repository:
+
+```text
+Set up Effect Config (@fantastic.dev/effect-config) in this Effect 4 app using
+its public documentation:
+https://github.com/FantasticDevHQ/effect-config#readme
+https://www.npmjs.com/package/@fantastic.dev/effect-config
+
+Read applicable AGENTS.md and AGENT.md files. Inspect Git status, the package
+manager and committed lockfile, the installed effect version (it must satisfy
+^4.1.4), the Node.js version (22.18 or later), how the app reads environment
+variables today, and any existing .env.example. Preserve user changes and the
+existing architecture and production settings.
+
+1. Install @fantastic.dev/effect-config with this repository's package manager
+   (effect is a peer dependency; do not upgrade it unless it is below 4.1.4).
+2. Create one key list module (for example src/config/keys.ts) that exports
+   defineKeys([...]) with every environment variable the app reads: name,
+   Effect Schema, required, secret and consumers. Mark credentials secret.
+3. Read the values with makeConfig(keys) where the app reads config today, so
+   secret keys arrive as Redacted. Do not log secret values.
+4. Make .env.example list exactly the declared keys, with placeholder values
+   only, never real secrets.
+5. Add `effect-config check --keys <key list module> --env-example .env.example`
+   as a script and to CI if the repository has CI.
+6. Only if the app already uses Doppler: wire layerDoppler from
+   @fantastic.dev/effect-config/doppler as described in the README. Do not
+   create Doppler projects or tokens, and do not read live secrets.
+
+Verify with `npx effect-config check --keys <key list module>`. It should
+print `ok: <N> keys match .env.example` and exit 0. Also run the app's own
+typecheck and tests. Report changed files, commands run, checks passed and
+anything that still needs the user, such as Doppler credentials.
 ```
 
-`effect` (`^4.1.4`) is a peer dependency. To use the Doppler provider, also
-install its optional peer `@distilled.cloud/doppler`.
+### Manual setup
+
+Requires Node.js 22.18 or later, an app that uses `effect` `^4.1.4`, and npm, pnpm or another package manager.
+
+Run from your app's root:
+
+```sh
+npm install @fantastic.dev/effect-config effect
+```
+
+Create `src/config/keys.ts`:
+
+```ts
+import { Schema } from "effect"
+import { defineKeys } from "@fantastic.dev/effect-config"
+
+export const keys = defineKeys([
+  { name: "PORT", schema: Schema.Int, required: true, secret: false, consumers: ["api"] },
+  { name: "API_KEY", schema: Schema.String, required: true, secret: true, consumers: ["api"] }
+])
+```
+
+Create `.env.example` with placeholder values:
+
+```sh
+PORT=3000
+API_KEY=
+```
+
+Check that the two agree:
+
+```sh
+npx effect-config check --keys src/config/keys.ts
+```
+
+Expected result: `ok: 2 keys match .env.example` and exit code 0. Remove `API_KEY` from `.env.example` and the same command prints `missing: API_KEY` and exits 1.
+
+Then read the values in your app with `makeConfig(keys)`, as shown in [Key list](#key-list).
 
 ## Key list
 
@@ -123,16 +199,21 @@ const program = makeConfig(keys).pipe(Effect.provide(ConfigLive))
 - An app that imports only `@fantastic.dev/effect-config` never bundles the
   Doppler client.
 
-## Requirements
+## Documentation
 
-- Node.js 22.18 or later
-- `effect` `^4.1.4` as a peer dependency
+- [Key list](#key-list): `defineKeys`, `makeConfig` and `keyConfig`
+- [Drift check](#check-drift-between-the-key-list-and-envexample): the `effect-config check` command and its exit codes
+- [Doppler](#doppler): the optional `@fantastic.dev/effect-config/doppler` provider
+- [Changelog](CHANGELOG.md)
+- [npm package](https://www.npmjs.com/package/@fantastic.dev/effect-config)
 
-## Development
+## Contributing
+
+Source development needs Node.js 22.18 or later and pnpm 10.
 
 ```sh
 pnpm install
-pnpm check   # typecheck, tests, build, PR-standard and repository tests
+pnpm check   # typecheck, build, tests, type tests, PR-standard, repository and release tests
 ```
 
 Pull requests follow the [PR standard](docs/pull-request-standard.md). Releases
