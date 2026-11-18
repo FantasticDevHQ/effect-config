@@ -1,12 +1,19 @@
 name: Release
 # Publishes @fantastic.dev/effect-config to npm when a v<semver> tag is pushed.
-# Verify and pack run on UbiCloud. Only Publish runs on a GitHub-hosted runner:
-# an owner-approved exception (2026-11-18, FORG-155), because npm trusted
-# publishing and provenance reject self-hosted runners. See docs/releasing.md.
+# Verify runs on UbiCloud. Only Publish runs on a GitHub-hosted runner: an
+# owner-approved exception (2026-11-18, FORG-155), because npm trusted
+# publishing and provenance reject self-hosted runners. Publish builds the tag
+# on that runner and publishes its own build, which must have exactly the npm
+# integrity of the tarball verified on UbiCloud. See docs/releasing.md.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v<semver> tag to verify and publish (recovery). Run from main.
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -14,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 env:
   PACKAGE_NAME: "@fantastic.dev/effect-config"
-  RELEASE_TAG: ${{ github.ref_name }}
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 jobs:
   verify:
     name: Verify release
@@ -23,37 +30,52 @@ jobs:
     outputs:
       version: ${{ steps.pack.outputs.version }}
       integrity: ${{ steps.pack.outputs.integrity }}
+      sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Require a tag ref
+      - name: Resolve the release tag
         run: |
           echo "runner.name=$RUNNER_NAME"
-          test "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" || { echo "Run this workflow from a v<semver> tag ref"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" || { echo "Push a v<semver> tag"; exit 1; }
+          fi
+          echo "Releasing $RELEASE_TAG"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
+      - name: Record the verified commit
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.22.0
           cache: pnpm
-      - name: Tag matches package version
-        run: node scripts/release/tag.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - name: Pack once
+      # Release tooling comes from the workflow's own commit, so recovering an
+      # older tag uses the current scripts. The package source is the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts/release
+          persist-credentials: false
+      - name: Tag matches package version
+        run: node .release-tools/scripts/release/tag.mjs
+      - name: Pack and record the integrity
         id: pack
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/release"
-          npm pack --json --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
-          node scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" | tee -a "$GITHUB_OUTPUT"
+          npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
+          node .release-tools/scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" | tee "$RUNNER_TEMP/pack.out"
+          REPORTED=$(sed -n 's/^integrity=//p' "$RUNNER_TEMP/pack.out")
+          COMPUTED=$(node .release-tools/scripts/release/integrity.mjs "$RUNNER_TEMP"/release/*.tgz)
+          node .release-tools/scripts/release/compare.mjs "$REPORTED" "$COMPUTED"
+          cat "$RUNNER_TEMP/pack.out" >> "$GITHUB_OUTPUT"
       - name: Install the tarball in a clean consumer
-        run: node scripts/release/consumer.mjs "$RUNNER_TEMP"/release/*.tgz
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-tarball
-          path: ${{ runner.temp }}/release/*.tgz
-          if-no-files-found: error
-          retention-days: 14
+        run: node .release-tools/scripts/release/consumer.mjs "$RUNNER_TEMP"/release/*.tgz
 
   publish:
     name: Publish
@@ -67,40 +89,66 @@ jobs:
       id-token: write
     env:
       PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
-      PACKAGE_INTEGRITY: ${{ needs.verify.outputs.integrity }}
+      VERIFIED_INTEGRITY: ${{ needs.verify.outputs.integrity }}
+      VERIFIED_SHA: ${{ needs.verify.outputs.sha }}
     steps:
+      # Check out the exact commit Verify tested, not the tag name again.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.verify.outputs.sha }}
           persist-credentials: false
+      - name: Require the tag to still point at the verified commit
+        run: |
+          TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | cut -f1)
+          test -n "$TAG_SHA" || TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)
+          test "$TAG_SHA" = "$VERIFIED_SHA" || { echo "$RELEASE_TAG now points at ${TAG_SHA:-nothing}, not $VERIFIED_SHA"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$VERIFIED_SHA"
+      # Release tooling comes from the workflow's own commit, so recovering an
+      # older tag uses the current scripts. The package source is the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts/release
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - name: Require npm trusted publishing support (npm 11.5.1+)
         run: node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-tarball
-          path: ${{ runner.temp }}/release
-      - name: Check the tarball is the one verified on UbiCloud
+      # Rebuild the verified commit on the provenance-capable runner. Dependency
+      # lifecycle scripts are skipped because this job can mint an OIDC token.
+      - name: Build the verified commit on this runner
         run: |
-          TARBALL=$(ls "$RUNNER_TEMP"/release/*.tgz)
-          ACTUAL="sha512-$(openssl dgst -sha512 -binary "$TARBALL" | openssl base64 -A)"
-          test "$ACTUAL" = "$PACKAGE_INTEGRITY" || { echo "Integrity mismatch: $ACTUAL"; exit 1; }
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+      - name: Pack and require the verified integrity
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
+          node .release-tools/scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" > "$RUNNER_TEMP/pack.out"
+          TARBALL="$RUNNER_TEMP/release/$(sed -n 's/^filename=//p' "$RUNNER_TEMP/pack.out")"
+          node .release-tools/scripts/release/compare.mjs "$VERIFIED_INTEGRITY" "$(node .release-tools/scripts/release/integrity.mjs "$TARBALL")"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
-      # No install, build or lifecycle scripts run here. OIDC trusted publishing; no token.
+          echo "PACKAGE_INTEGRITY=$VERIFIED_INTEGRITY" >> "$GITHUB_ENV"
+      # OIDC trusted publishing; no token. No lifecycle scripts run during publish.
       - name: Publish once with provenance
         run: |
-          EXISTING=$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity 2>/dev/null || true)
-          if [ -n "$EXISTING" ]; then
-            test "$EXISTING" = "$PACKAGE_INTEGRITY" || { echo "$PACKAGE_VERSION is already on npm with different contents"; exit 1; }
-            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published with this integrity"
+          set -euo pipefail
+          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            PUBLISHED=$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity)
+            node .release-tools/scripts/release/compare.mjs "$VERIFIED_INTEGRITY" "$PUBLISHED" \
+              || { echo "$PACKAGE_VERSION is already on npm with a different integrity"; exit 1; }
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published with the verified integrity; not publishing again"
           else
             npm publish "$TARBALL" --provenance --access public --ignore-scripts
           fi
       - name: Verify the public version and provenance
-        run: node scripts/release/published.mjs
-      - name: Create the GitHub release
+        run: node .release-tools/scripts/release/published.mjs
+      - name: Create the GitHub release if missing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

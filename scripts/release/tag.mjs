@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url"
 
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/
 
+export function changelogErrors(changelog, version) {
+  const headings = [...(changelog ?? "").matchAll(/^## \[?v?([0-9][^\]\s]*)\]?/gm)].map((match) => match[1])
+  return headings.includes(version) ? [] : [`CHANGELOG.md has no "## ${version}" entry`]
+}
+
 export function releaseTagErrors(tag, version) {
   const errors = []
   if (typeof tag !== "string" || !tag.startsWith("v")) errors.push(`Release tag must look like v<semver>, got ${JSON.stringify(tag)}`)
@@ -16,9 +21,17 @@ export function releaseTagErrors(tag, version) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"))
-  const errors = releaseTagErrors(process.env.RELEASE_TAG, version)
+  // The release source is the current directory (the tag's checkout), which
+  // can differ from where this script lives during a recovery run.
+  const { version } = JSON.parse(readFileSync(`${process.cwd()}/package.json`, "utf8"))
+  let changelog = ""
+  try {
+    changelog = readFileSync(`${process.cwd()}/CHANGELOG.md`, "utf8")
+  } catch {
+    // Reported below as a missing entry.
+  }
+  const errors = [...releaseTagErrors(process.env.RELEASE_TAG, version), ...changelogErrors(changelog, version)]
   for (const error of errors) console.error(error)
   if (errors.length > 0) process.exit(1)
-  console.log(`Release tag ${process.env.RELEASE_TAG} matches package.json version ${version}`)
+  console.log(`Release tag ${process.env.RELEASE_TAG} matches package.json version ${version} and CHANGELOG.md`)
 }
