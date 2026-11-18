@@ -78,11 +78,12 @@ import { makeConfig } from "@fantastic.dev/effect-config"
 import { layerDoppler, stageToConfig } from "@fantastic.dev/effect-config/doppler"
 import { keys } from "./keys.ts"
 
-const config = yield* stageToConfig(process.env.STAGE ?? "local", { local: "dev", preview: "stg", prod: "prd" })
-
-const ConfigLive = layerDoppler(keys, { project: "my-app", config }).pipe(
-  Layer.provide(FetchHttpClient.layer)
-)
+const ConfigLive = Layer.unwrap(
+  Effect.map(
+    stageToConfig(process.env.STAGE ?? "local", { local: "dev", preview: "stg", prod: "prd" }),
+    (config) => layerDoppler(keys, { project: "my-app", config })
+  )
+).pipe(Layer.provide(FetchHttpClient.layer))
 
 const program = makeConfig(keys).pipe(Effect.provide(ConfigLive))
 ```
