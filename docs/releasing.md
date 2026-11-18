@@ -15,19 +15,37 @@ laptop.
    ```
 
 3. The `Release` workflow runs:
-   - **Verify release** (`ubicloud-standard-2-ubuntu-2404`) checks that the tag
-     equals `v` + `package.json` version, runs `pnpm check`, packs the tarball
-     once and uploads it with its integrity.
-   - **Publish** (`ubuntu-24.04`) downloads that tarball, checks its integrity,
-     and runs `npm publish <tarball> --provenance --access public
-     --ignore-scripts`. It installs and builds nothing. If the version is
-     already on npm with the same integrity it skips the write; different
-     contents fail the job. It then waits until the registry serves the
-     version with an SLSA provenance attestation, and creates the GitHub
-     release.
+   - **Verify release** (`ubicloud-standard-2-ubuntu-2404`) checks out the
+     tag, checks that it equals `v` + `package.json` version, runs `pnpm check`,
+     packs the package, records its content digest (sha256 over every file's
+     path and sha256, see `scripts/release/digest.mjs`), and installs the
+     tarball in a clean consumer.
+   - **Publish** (`ubuntu-24.04`) checks out the same tag, installs with the
+     frozen lockfile, builds and packs on that runner, so the provenance
+     attestation describes the build that is published. It fails unless that
+     pack has the same content digest as the verified one. It then runs
+     `npm publish <its own tarball> --provenance --access public
+     --ignore-scripts`. If the version is already on npm, it compares the
+     registry tarball's content digest instead and skips the write; different
+     contents fail the job. It then waits until the registry serves the version
+     with an SLSA provenance attestation, and creates the GitHub release if it
+     is missing.
 
 A failed publish is never retried automatically. Check the registry before
-re-running the workflow at the same tag.
+recovering.
+
+## Recover an existing tag
+
+Re-running an old run uses the old workflow. To verify and publish an existing
+tag with the current workflow, dispatch it from `main` without moving the tag:
+
+```sh
+gh workflow run release.yml --ref main -f release_tag=v0.1.0
+```
+
+The jobs check out `refs/tags/<release_tag>`. An already-published version is
+compared by content and not published again. Do not move or delete a release
+tag, and do not publish a version that differs from its tag.
 
 ## Why one job runs on a GitHub-hosted runner
 

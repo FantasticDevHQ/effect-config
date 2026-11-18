@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
+import { createHash } from "node:crypto"
+import { gzipSync } from "node:zlib"
+import { contentDigest, tarEntries } from "./digest.mjs"
 import { publicationErrors } from "./published.mjs"
 import { releaseTagErrors } from "./tag.mjs"
 
@@ -36,7 +39,60 @@ test("release workflow keeps the GitHub-hosted runner to the Publish job only", 
   assert.match(publish, /runs-on: ubuntu-24\.04/)
   assert.match(publish, /environment: npm/)
   assert.match(publish, /id-token: write/)
-  assert.match(publish, /npm publish "\$TARBALL" --provenance --access public/)
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets/)
   assert.match(workflow, /^on:\n  push:\n    tags: \["v\*"\]/m)
+  // Only the publish job may mint an OIDC token.
+  assert.equal(workflow.match(/id-token: write/g)?.length, 1)
+})
+
+test("Publish builds the tag on its runner and publishes that build only if it matches the verified content", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
+  const publish = workflow.slice(workflow.indexOf("\n  publish:"))
+  const order = [
+    "ref: refs/tags/${{ env.RELEASE_TAG }}",
+    "pnpm install --frozen-lockfile",
+    "pnpm build",
+    "npm pack --json --ignore-scripts",
+    'node scripts/release/compare.mjs "$VERIFIED_DIGEST"',
+    'npm publish "$TARBALL" --provenance --access public --ignore-scripts'
+  ].map((step) => {
+    const index = publish.indexOf(step)
+    assert.ok(index >= 0, `Publish job runs: ${step}`)
+    return index
+  })
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "steps run in this order")
+  assert.doesNotMatch(publish, /download-artifact/, "Publish uses its own build, not the UbiCloud tarball")
+})
+
+test("recovery dispatch takes an existing tag and re-checks published contents", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
+  assert.match(workflow, /workflow_dispatch:\n    inputs:\n      release_tag:/)
+  assert.match(workflow, /RELEASE_TAG: \$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}/)
+  assert.match(workflow, /npm view "\$PACKAGE_NAME@\$PACKAGE_VERSION" version/)
+  assert.match(workflow, /already on npm with different contents/)
+})
+
+const tar = (files) => {
+  const blocks = []
+  for (const [name, text] of files) {
+    const body = Buffer.from(text)
+    const header = Buffer.alloc(512)
+    header.write(name, 0)
+    header.write(body.length.toString(8).padStart(11, "0"), 124)
+    header.write("0", 156)
+    blocks.push(header, body, Buffer.alloc((512 - (body.length % 512)) % 512))
+  }
+  return Buffer.concat([...blocks, Buffer.alloc(1024)])
+}
+
+test("content digest depends on file paths and contents, not archive order or gzip bytes", () => {
+  const a = tar([["package/a.js", "1"], ["package/b.js", "2"]])
+  const reordered = tar([["package/b.js", "2"], ["package/a.js", "1"]])
+  assert.deepEqual(tarEntries(a), [
+    ["package/a.js", createHash("sha256").update("1").digest("hex")],
+    ["package/b.js", createHash("sha256").update("2").digest("hex")]
+  ])
+  assert.equal(contentDigest(gzipSync(a, { level: 1 })), contentDigest(gzipSync(reordered, { level: 9 })))
+  assert.notEqual(contentDigest(gzipSync(a)), contentDigest(gzipSync(tar([["package/a.js", "1"], ["package/b.js", "3"]]))))
+  assert.notEqual(contentDigest(gzipSync(a)), contentDigest(gzipSync(tar([["package/a.js", "1"]]))))
 })
