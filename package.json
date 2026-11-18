@@ -1,6 +1,6 @@
 {
   "name": "@fantastic.dev/effect-config",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Typed configuration keys for Effect: one key list, Effect Config, drift checks and an optional Doppler ConfigProvider.",
   "type": "module",
   "license": "MIT",
@@ -40,6 +40,7 @@
     "dist",
     "!dist/**/*.test.*",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "assets/fantastic-dev-logo.svg"
   ],
@@ -49,8 +50,9 @@
     "test": "vitest run",
     "test:pr-standard": "node --test scripts/pr-standard.test.mjs scripts/enforce-pr-standard.test.mjs",
     "test:repo": "node --test scripts/repository.test.mjs",
-    "check": "pnpm typecheck && pnpm build && pnpm test && pnpm test:types && pnpm test:pr-standard && pnpm test:repo",
-    "test:types": "vitest run --typecheck.only"
+    "check": "pnpm typecheck && pnpm build && pnpm test && pnpm test:types && pnpm test:pr-standard && pnpm test:repo && pnpm test:release",
+    "test:types": "vitest run --typecheck.only",
+    "test:release": "node --test scripts/release/*.test.mjs"
   },
   "peerDependencies": {
     "effect": "^4.1.4",

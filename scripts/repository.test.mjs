@@ -35,18 +35,30 @@ test("README header shows the logo and the Fantastic.Dev note first", () => {
   assert.ok(head.includes("[A Fantastic.Dev Project](https://fantastic.dev)"))
 })
 
-test(`every CI job runs on ${runner}`, () => {
+// The only approved exception: npm trusted publishing and provenance reject
+// self-hosted runners, so the release Publish job runs GitHub-hosted.
+const approvedExceptions = new Map([["release.yml:publish", "ubuntu-24.04"]])
+
+test(`every CI job runs on ${runner}, except the approved Publish job`, () => {
   const dir = new URL("../.github/workflows/", import.meta.url)
   const workflows = readdirSync(dir).filter((name) => /\.ya?ml$/.test(name))
   assert.ok(workflows.length > 0)
+  const seenExceptions = []
   for (const name of workflows) {
     const text = readFileSync(new URL(name, dir), "utf8")
-    const jobs = text.match(/^jobs:\n([\s\S]*)$/m)?.[1] ?? ""
-    const jobNames = [...jobs.matchAll(/^ {2}([A-Za-z0-9_-]+):\s*$/gm)].map((m) => m[1])
-    const labels = [...text.matchAll(/^\s+runs-on:\s*(\S+)\s*$/gm)].map((m) => m[1])
-    assert.equal(labels.length, jobNames.length, `${name}: each job declares runs-on`)
-    for (const label of labels) assert.equal(label, runner, `${name} uses ${label}`)
+    const jobs = text.slice(text.search(/^jobs:\n/m))
+    const blocks = jobs.split(/^ {2}(?=[A-Za-z0-9_-]+:\s*$)/m).slice(1)
+    const labels = [...text.matchAll(/^\s+runs-on:\s*(\S+)\s*$/gm)]
+    assert.equal(labels.length, blocks.length, `${name}: each job declares runs-on`)
+    for (const block of blocks) {
+      const job = block.slice(0, block.indexOf(":"))
+      const label = block.match(/^\s+runs-on:\s*(\S+)\s*$/m)?.[1]
+      const exception = approvedExceptions.get(`${name}:${job}`)
+      if (exception !== undefined) seenExceptions.push(`${name}:${job}`)
+      assert.equal(label, exception ?? runner, `${name} job ${job} uses ${label}`)
+    }
   }
+  assert.deepEqual(seenExceptions, [...approvedExceptions.keys()])
 })
 
 test("tracked files stay generic", () => {
