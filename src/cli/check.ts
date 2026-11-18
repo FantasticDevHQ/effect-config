@@ -42,22 +42,46 @@ export interface Drift {
   readonly extra: ReadonlyArray<string>
 }
 
-const assignment = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/
+const assignment = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/
+
+const quotes: ReadonlySet<string> = new Set(['"', "'", "`"])
+
+/** Whether `text` contains a closing `quote`; `\` escapes in `"` and backtick values. */
+const closes = (text: string, quote: string): boolean => {
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (char === "\\" && quote !== "'") index++
+    else if (char === quote) return true
+  }
+  return false
+}
 
 /**
  * Returns the key names assigned in a dotenv-style file, in order, without
  * duplicates. Blank lines and `#` comments are ignored, and an `export `
- * prefix is accepted. Values are never parsed or returned.
+ * prefix is accepted. A quoted value (`"`, `'` or backtick) may span lines;
+ * lines inside it are skipped, so value content is never read as a key.
+ * Values are never returned.
  *
  * @since 0.1.0
  * @category parsing
  */
 export const parseEnvExample = (text: string): ReadonlyArray<string> => {
   const names = new Set<string>()
-  for (const line of text.split(/\r\n|\r|\n/)) {
+  const lines = text.split(/\r\n|\r|\n/)
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? ""
     if (/^\s*(#|$)/.test(line)) continue
     const match = assignment.exec(line)
-    if (match?.[1] !== undefined) names.add(match[1])
+    if (match?.[1] === undefined) continue
+    names.add(match[1])
+    const value = match[2] ?? ""
+    const quote = value.charAt(0)
+    if (quotes.has(quote) && !closes(value.slice(1), quote)) {
+      // Skip the continuation lines of a multiline quoted value.
+      index++
+      while (index < lines.length && !closes(lines[index] ?? "", quote)) index++
+    }
   }
   return [...names]
 }

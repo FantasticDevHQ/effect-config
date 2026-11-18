@@ -31,6 +31,39 @@ describe("parseEnvExample", () => {
   })
 })
 
+describe("parseEnvExample with quoted values", () => {
+  it("skips the lines inside multiline quoted values", () => {
+    const text = [
+      "PORT=\"line one",
+      "FAKE_KEY=secret",
+      "end\"",
+      "API_KEY='first",
+      "NOT_A_KEY=x",
+      "last'",
+      "TEMPLATE=`a",
+      "ALSO_NOT=b`",
+      "LOG_LEVEL=info"
+    ].join("\n")
+    expect(parseEnvExample(text)).toEqual(["PORT", "API_KEY", "TEMPLATE", "LOG_LEVEL"])
+  })
+
+  it("handles quotes that close on the same line, escapes and inner quotes", () => {
+    const text = [
+      "A=\"one line\"",
+      "B=\"escaped \\\" quote\"",
+      "C='it''s'",
+      "D=no\"quote at start",
+      "E=\"ends with escaped backslash \\\\\"",
+      "F=1"
+    ].join("\n")
+    expect(parseEnvExample(text)).toEqual(["A", "B", "C", "D", "E", "F"])
+  })
+
+  it("treats an unterminated quote as running to the end of the file", () => {
+    expect(parseEnvExample("A=\"open\nB=1\nC=2")).toEqual(["A"])
+  })
+})
+
 describe("diffKeys", () => {
   it("lists declared names missing from the example and undeclared extras", () => {
     expect(diffKeys(["A", "B", "C"], ["B", "D"])).toEqual({ missing: ["A", "C"], extra: ["D"] })
@@ -48,6 +81,7 @@ describe("effect-config check", () => {
       const run = cli("check", "--keys", keysModule, "--env-example", example)
       expect(run.stdout).toContain("missing: API_KEY")
       expect(run.stdout).toContain("extra: FROM_EXAMPLE_ONLY")
+      expect(run.status).toBe(1)
     }).pipe(Effect.provide(NodeServices.layer)))
 
   it("drift", () => {
@@ -71,6 +105,15 @@ describe("effect-config check", () => {
     const run = cli("check", "--keys", keysModule, "--env-example", envFile("PORT=1\nAPI_KEY=\nLOG_LEVEL=info\n"))
     expect(run.stdout).toContain("ok: 3 keys match")
     expect(run.stdout).not.toContain("missing:")
+    expect(run.status).toBe(0)
+  })
+
+  it("clean with a multiline quoted value whose lines look like keys", () => {
+    const example = envFile("PORT=\"multi\nFAKE_KEY=sk_live_123\nline\"\nAPI_KEY=\nLOG_LEVEL=info\n")
+    const run = cli("check", "--keys", keysModule, "--env-example", example)
+    expect(run.stdout).toContain("ok: 3 keys match")
+    expect(run.stdout + run.stderr).not.toContain("FAKE_KEY")
+    expect(run.stdout + run.stderr).not.toContain("sk_live_123")
     expect(run.status).toBe(0)
   })
 
