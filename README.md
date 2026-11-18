@@ -80,6 +80,43 @@ names from the example file, never the values. Exit codes: `0` when the keys
 match, `1` on drift, `2` when the inputs cannot be read. A `.ts` key list
 module needs Node.js 22.18 or later.
 
+## Doppler
+
+Read the declared keys from [Doppler](https://www.doppler.com) without
+changing app code. The provider lives on its own subpath, and the client is
+an optional peer dependency:
+
+```sh
+pnpm add @distilled.cloud/doppler
+```
+
+```ts
+import { Effect, Layer } from "effect"
+import * as FetchHttpClient from "effect/http/FetchHttpClient"
+import { makeConfig } from "@fantastic.dev/effect-config"
+import { layerDoppler, stageToConfig } from "@fantastic.dev/effect-config/doppler"
+import { keys } from "./keys.ts"
+
+const ConfigLive = Layer.unwrap(
+  Effect.map(
+    stageToConfig(process.env.STAGE ?? "local", { local: "dev", preview: "stg", prod: "prd" }),
+    (config) => layerDoppler(keys, { project: "my-app", config })
+  )
+).pipe(Layer.provide(FetchHttpClient.layer))
+
+const program = makeConfig(keys).pipe(Effect.provide(ConfigLive))
+```
+
+- Only keys in the list are read. Asking for any other key fails with a
+  `DopplerConfigError` whose reason is `not-allowlisted`.
+- A 401 or 403 from Doppler fails with reason `authentication`. Error
+  messages contain only the reason, the config name and the key name, never
+  the token or a value.
+- The token comes from `DOPPLER_TOKEN` (or `DOPPLER_API_KEY`), or from the
+  `token` option as a `Redacted` value.
+- An app that imports only `@fantastic.dev/effect-config` never bundles the
+  Doppler client.
+
 ## Requirements
 
 - Node.js 22.18 or later
