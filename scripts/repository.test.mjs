@@ -29,10 +29,33 @@ test("logo is the unchanged brand-kit asset", () => {
   assert.equal(createHash("sha256").update(logo).digest("hex"), brandLogoSha256)
 })
 
-test("README header shows the logo and the Fantastic.Dev note first", () => {
-  const head = read("README.md").split("\n").slice(0, 10).join("\n")
-  assert.match(head, /<img src="assets\/fantastic-dev-logo\.svg"/)
-  assert.ok(head.includes("[A Fantastic.Dev Project](https://fantastic.dev)"))
+// FantasticDevHQ/oss-standards header and README standards.
+test("README header follows the Fantastic.Dev header standard", () => {
+  const readme = read("README.md")
+  const header = readme.slice(0, readme.indexOf("\n---\n"))
+  assert.match(header, /^<p align="center">\n {2}<a href="https:\/\/fantastic\.dev"><img src="assets\/fantastic-dev-logo\.svg" width="80" height="80" alt="Fantastic\.Dev" \/><\/a>/)
+  assert.match(header, /<h1 align="center">Effect Config<\/h1>/)
+  assert.ok(header.includes('<p align="center">A <a href="https://fantastic.dev">Fantastic.Dev</a> Project</p>'))
+  for (const button of ["Fantastic.dev-94C173", "GitHub-0c0e13", "YouTube-FF0033", "Twitter_%2F_X-0c0e13"]) {
+    assert.ok(header.includes(`https://img.shields.io/badge/${button}?style=for-the-badge`), `${button} button`)
+  }
+  assert.ok(header.includes('<a href="#quick-start">Quick start</a>'))
+  assert.ok(header.includes('<a href="#have-my-agent-set-this-up">Agent setup</a>'))
+  assert.doesNotMatch(header, /&(?!amp;)[a-z]+=/, "HTML query separators must be &amp;")
+})
+
+test("README quick start has a self-contained public agent prompt and manual setup", () => {
+  const readme = read("README.md")
+  const quick = readme.slice(readme.indexOf("## Quick start\n"), readme.indexOf("\n## ", readme.indexOf("## Quick start\n") + 1))
+  assert.ok(quick.includes("### Have my agent set this up\n"))
+  assert.ok(quick.includes("### Manual setup\n"))
+  const prompts = [...quick.matchAll(/```text\n([\s\S]*?)```/g)].map((match) => match[1])
+  assert.equal(prompts.length, 1, "exactly one text prompt")
+  const prompt = prompts[0]
+  assert.ok(prompt.includes("https://github.com/FantasticDevHQ/effect-config"))
+  assert.ok(prompt.includes("effect-config check"))
+  assert.doesNotMatch(prompt, /oss-standards|brand-kit|linear\.app|localhost/i, "no private URLs")
+  for (const url of prompt.match(/https:\/\/\S+/g) ?? []) assert.match(url, /^https:\/\/(github\.com\/FantasticDevHQ\/effect-config|www\.npmjs\.com\/package\/@fantastic\.dev\/effect-config)/)
 })
 
 // The only approved exception: npm trusted publishing and provenance reject
