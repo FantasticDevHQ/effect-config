@@ -106,3 +106,14 @@ test("content digest depends on file paths and contents, not archive order or gz
   assert.notEqual(contentDigest(gzipSync(a)), contentDigest(gzipSync(tar([["package/a.js", "1"], ["package/b.js", "3"]]))))
   assert.notEqual(contentDigest(gzipSync(a)), contentDigest(gzipSync(tar([["package/a.js", "1"]]))))
 })
+
+test("compare.mjs fails on a content mismatch, which stops Publish before npm publish", async () => {
+  const { spawnSync } = await import("node:child_process")
+  const script = new URL("./compare.mjs", import.meta.url).pathname
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8" })
+  assert.equal(run("sha256-a", "sha256-a").status, 0)
+  const mismatch = run("sha256-a", "sha256-b")
+  assert.equal(mismatch.status, 1)
+  assert.match(mismatch.stderr, /Content digest mismatch/)
+  assert.equal(run("", "").status, 1, "a missing verified digest never passes")
+})
