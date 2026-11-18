@@ -71,6 +71,12 @@
     "registry": "https://registry.npmjs.org/",
     "provenance": true
   },
+  "dependencies": {
+    "@effect/platform-node": "4.1.4"
+  },
+  "bin": {
+    "effect-config": "./dist/cli/main.js"
+  },
   "peerDependenciesMeta": {
     "@distilled.cloud/doppler": {
       "optional": true

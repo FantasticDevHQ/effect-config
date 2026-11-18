@@ -61,6 +61,25 @@ const program = Effect.gen(function*() {
 - The values come from the active `ConfigProvider` (environment variables by
   default), so tests can swap in `ConfigProvider.fromUnknown(...)`.
 
+## Drift check
+
+Fail CI when `.env.example` and the key list disagree:
+
+```sh
+effect-config check --keys ./src/config/keys.ts --env-example .env.example
+```
+
+```text
+missing: API_KEY      # declared, but not in .env.example
+extra: OLD_SETTING    # in .env.example, but not declared
+```
+
+The command imports the key list module (the default export, the only
+`defineKeys` export, or the one named by `--export`). It reads only the key
+names from the example file, never the values. Exit codes: `0` when the keys
+match, `1` on drift, `2` when the inputs cannot be read. A `.ts` key list
+module needs Node.js 22.18 or later.
+
 ## Doppler
 
 Read the declared keys from [Doppler](https://www.doppler.com) without
