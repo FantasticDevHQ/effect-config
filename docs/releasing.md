@@ -16,20 +16,23 @@ laptop.
 
 3. The `Release` workflow runs:
    - **Verify release** (`ubicloud-standard-2-ubuntu-2404`) checks out the
-     tag, checks that it equals `v` + `package.json` version, runs `pnpm check`,
-     packs the package, records its content digest (sha256 over every file's
-     path and sha256, see `scripts/release/digest.mjs`), and installs the
-     tarball in a clean consumer.
-   - **Publish** (`ubuntu-24.04`) checks out the same tag, installs with the
-     frozen lockfile, builds and packs on that runner, so the provenance
+     tag, runs `pnpm check`, then checks that the tag equals `v` +
+     `package.json` version and that `CHANGELOG.md` has that version. It packs
+     the package and records its npm integrity (sha512 of the tarball bytes,
+     cross-checked against npm's report), and installs the tarball in a clean
+     consumer.
+   - **Publish** (`ubuntu-24.04`) checks out the exact commit Verify tested
+     and fails if the tag has moved. It installs with the frozen lockfile and
+     `--ignore-scripts`, builds and packs on that runner, so the provenance
      attestation describes the build that is published. It fails unless that
-     pack has the same content digest as the verified one. It then runs
+     tarball has **exactly** the verified integrity. npm pack output is
+     byte-identical across npm 10 and 11 for the same files. It then runs
      `npm publish <its own tarball> --provenance --access public
-     --ignore-scripts`. If the version is already on npm, it compares the
-     registry tarball's content digest instead and skips the write; different
-     contents fail the job. It then waits until the registry serves the version
-     with an SLSA provenance attestation, and creates the GitHub release if it
-     is missing.
+     --ignore-scripts`. If the version is already on npm, it requires the
+     registry's integrity to equal the verified one and skips the write;
+     anything else fails. It then waits until the registry serves the version
+     with that integrity and an SLSA provenance attestation, and creates the
+     GitHub release if it is missing.
 
 A failed publish is never retried automatically. Check the registry before
 recovering.
@@ -44,7 +47,7 @@ gh workflow run release.yml --ref main -f release_tag=v0.1.0
 ```
 
 The jobs check out `refs/tags/<release_tag>`. An already-published version is
-compared by content and not published again. Do not move or delete a release
+compared by integrity and not published again. Do not move or delete a release
 tag, and do not publish a version that differs from its tag.
 
 ## Why one job runs on a GitHub-hosted runner

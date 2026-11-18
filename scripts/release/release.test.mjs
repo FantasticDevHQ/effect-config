@@ -2,10 +2,10 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import { createHash } from "node:crypto"
-import { gzipSync } from "node:zlib"
-import { contentDigest, tarEntries } from "./digest.mjs"
+import { integrityErrors } from "./compare.mjs"
+import { integrityOf, integrityPattern } from "./integrity.mjs"
 import { publicationErrors } from "./published.mjs"
-import { releaseTagErrors } from "./tag.mjs"
+import { changelogErrors, releaseTagErrors } from "./tag.mjs"
 
 test("release tag must be v<semver> and equal the package version", () => {
   assert.deepEqual(releaseTagErrors("v0.1.0", "0.1.0"), [])
@@ -45,7 +45,7 @@ test("release workflow keeps the GitHub-hosted runner to the Publish job only", 
   assert.equal(workflow.match(/id-token: write/g)?.length, 1)
 })
 
-test("Publish builds the tag on its runner and publishes that build only if it matches the verified content", () => {
+test("Publish builds the verified commit on its runner and publishes that build only with the verified integrity", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
   const publish = workflow.slice(workflow.indexOf("\n  publish:"))
   const order = [
@@ -54,7 +54,7 @@ test("Publish builds the tag on its runner and publishes that build only if it m
     "pnpm install --frozen-lockfile --ignore-scripts",
     "pnpm build",
     "npm pack --json --ignore-scripts",
-    'node .release-tools/scripts/release/compare.mjs "$VERIFIED_DIGEST"',
+    'node .release-tools/scripts/release/compare.mjs "$VERIFIED_INTEGRITY"',
     'npm publish "$TARBALL" --provenance --access public --ignore-scripts'
   ].map((step) => {
     const index = publish.indexOf(step)
@@ -79,41 +79,52 @@ test("recovery dispatch takes an existing tag and re-checks published contents",
   assert.match(workflow, /workflow_dispatch:\n    inputs:\n      release_tag:/)
   assert.match(workflow, /RELEASE_TAG: \$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}/)
   assert.match(workflow, /npm view "\$PACKAGE_NAME@\$PACKAGE_VERSION" version/)
-  assert.match(workflow, /already on npm with different contents/)
+  assert.match(workflow, /already on npm with a different integrity/)
 })
 
-const tar = (files) => {
-  const blocks = []
-  for (const [name, text] of files) {
-    const body = Buffer.from(text)
-    const header = Buffer.alloc(512)
-    header.write(name, 0)
-    header.write(body.length.toString(8).padStart(11, "0"), 124)
-    header.write("0", 156)
-    blocks.push(header, body, Buffer.alloc((512 - (body.length % 512)) % 512))
+test("integrity is npm's sha512 format and rejects empty input", () => {
+  const value = integrityOf(Buffer.from("tarball bytes"))
+  assert.equal(value, `sha512-${createHash("sha512").update("tarball bytes").digest("base64")}`)
+  assert.match(value, integrityPattern)
+  assert.match("sha512-zNhVIvOac4TsTZ9GaZFDqB7VdhP0m1BgYoPsycljCZZNYk4WlVrZG4N3Id2RdGwEnaU0WMS+V46dnqN54BOs8Q==", integrityPattern)
+  assert.throws(() => integrityOf(Buffer.alloc(0)), /Empty tarball/)
+})
+
+test("integrity gate rejects missing, malformed and different values", () => {
+  const a = integrityOf(Buffer.from("a"))
+  const b = integrityOf(Buffer.from("b"))
+  assert.deepEqual(integrityErrors(a, a), [])
+  assert.match(integrityErrors(a, b).join(), /mismatch/)
+  for (const bad of ["", undefined, "sha512-", "sha256-abc", `${a}x`, "sha1-AAAA"]) {
+    assert.ok(integrityErrors(bad, a).length > 0, `expected ${bad}`)
+    assert.ok(integrityErrors(a, bad).length > 0, `actual ${bad}`)
   }
-  return Buffer.concat([...blocks, Buffer.alloc(1024)])
-}
-
-test("content digest depends on file paths and contents, not archive order or gzip bytes", () => {
-  const a = tar([["package/a.js", "1"], ["package/b.js", "2"]])
-  const reordered = tar([["package/b.js", "2"], ["package/a.js", "1"]])
-  assert.deepEqual(tarEntries(a), [
-    ["package/a.js", createHash("sha256").update("1").digest("hex")],
-    ["package/b.js", createHash("sha256").update("2").digest("hex")]
-  ])
-  assert.equal(contentDigest(gzipSync(a, { level: 1 })), contentDigest(gzipSync(reordered, { level: 9 })))
-  assert.notEqual(contentDigest(gzipSync(a)), contentDigest(gzipSync(tar([["package/a.js", "1"], ["package/b.js", "3"]]))))
-  assert.notEqual(contentDigest(gzipSync(a)), contentDigest(gzipSync(tar([["package/a.js", "1"]]))))
 })
 
-test("compare.mjs fails on a content mismatch, which stops Publish before npm publish", async () => {
+test("tag check also requires a CHANGELOG entry for the version", () => {
+  assert.deepEqual(changelogErrors("# Changelog\n\n## 0.1.0\n\nFirst release.", "0.1.0"), [])
+  assert.deepEqual(changelogErrors("## [0.2.0] - 2026-11-18", "0.2.0"), [])
+  assert.match(changelogErrors("## 0.1.0", "0.2.0").join(), /no "## 0.2.0" entry/)
+  assert.equal(changelogErrors("", "0.1.0").length, 1)
+})
+
+test("Publish pins the verified integrity for the fresh and already-published paths", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
+  const publish = workflow.slice(workflow.indexOf("\n  publish:"))
+  assert.match(publish, /echo "PACKAGE_INTEGRITY=\$VERIFIED_INTEGRITY" >> "\$GITHUB_ENV"/)
+  assert.match(publish, /compare\.mjs "\$VERIFIED_INTEGRITY" "\$PUBLISHED"/)
+  assert.doesNotMatch(workflow, /digest/i, "no content-digest gate remains")
+})
+
+test("compare.mjs exits non-zero on a mismatch, which stops Publish before npm publish", async () => {
   const { spawnSync } = await import("node:child_process")
   const script = new URL("./compare.mjs", import.meta.url).pathname
   const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8" })
-  assert.equal(run("sha256-a", "sha256-a").status, 0)
-  const mismatch = run("sha256-a", "sha256-b")
+  const a = integrityOf(Buffer.from("a"))
+  assert.equal(run(a, a).status, 0)
+  const mismatch = run(a, integrityOf(Buffer.from("b")))
   assert.equal(mismatch.status, 1)
-  assert.match(mismatch.stderr, /Content digest mismatch/)
-  assert.equal(run("", "").status, 1, "a missing verified digest never passes")
+  assert.match(mismatch.stderr, /Integrity mismatch/)
+  assert.equal(run("", "").status, 1, "a missing verified integrity never passes")
+  assert.equal(run(a, "").status, 1, "a failed integrity computation never passes")
 })

@@ -3,8 +3,8 @@ name: Release
 # Verify runs on UbiCloud. Only Publish runs on a GitHub-hosted runner: an
 # owner-approved exception (2026-11-18, FORG-155), because npm trusted
 # publishing and provenance reject self-hosted runners. Publish builds the tag
-# on that runner and publishes its own build, which must match the content
-# verified on UbiCloud. See docs/releasing.md.
+# on that runner and publishes its own build, which must have exactly the npm
+# integrity of the tarball verified on UbiCloud. See docs/releasing.md.
 on:
   push:
     tags: ["v*"]
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       version: ${{ steps.pack.outputs.version }}
-      digest: ${{ steps.pack.outputs.digest }}
+      integrity: ${{ steps.pack.outputs.integrity }}
       sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Resolve the release tag
@@ -63,13 +63,17 @@ jobs:
           persist-credentials: false
       - name: Tag matches package version
         run: node .release-tools/scripts/release/tag.mjs
-      - name: Pack and record the content digest
+      - name: Pack and record the integrity
         id: pack
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/release"
-          npm pack --json --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
-          node .release-tools/scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" | tee -a "$GITHUB_OUTPUT"
-          echo "digest=$(node .release-tools/scripts/release/digest.mjs "$RUNNER_TEMP"/release/*.tgz)" | tee -a "$GITHUB_OUTPUT"
+          npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
+          node .release-tools/scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" | tee "$RUNNER_TEMP/pack.out"
+          REPORTED=$(sed -n 's/^integrity=//p' "$RUNNER_TEMP/pack.out")
+          COMPUTED=$(node .release-tools/scripts/release/integrity.mjs "$RUNNER_TEMP"/release/*.tgz)
+          node .release-tools/scripts/release/compare.mjs "$REPORTED" "$COMPUTED"
+          cat "$RUNNER_TEMP/pack.out" >> "$GITHUB_OUTPUT"
       - name: Install the tarball in a clean consumer
         run: node .release-tools/scripts/release/consumer.mjs "$RUNNER_TEMP"/release/*.tgz
 
@@ -85,7 +89,7 @@ jobs:
       id-token: write
     env:
       PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
-      VERIFIED_DIGEST: ${{ needs.verify.outputs.digest }}
+      VERIFIED_INTEGRITY: ${{ needs.verify.outputs.integrity }}
       VERIFIED_SHA: ${{ needs.verify.outputs.sha }}
     steps:
       # Check out the exact commit Verify tested, not the tag name again.
@@ -120,28 +124,27 @@ jobs:
         run: |
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm build
-      - name: Pack and compare with the verified content
+      - name: Pack and require the verified integrity
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/release"
           npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
-          TARBALL=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[0].filename)' "$RUNNER_TEMP/pack.json")
-          TARBALL="$RUNNER_TEMP/release/$TARBALL"
-          node .release-tools/scripts/release/digest.mjs "$TARBALL" > "$RUNNER_TEMP/digest.txt"
-          node .release-tools/scripts/release/compare.mjs "$VERIFIED_DIGEST" "$(cat "$RUNNER_TEMP/digest.txt")"
+          node .release-tools/scripts/release/pack-outputs.mjs "$RUNNER_TEMP/pack.json" > "$RUNNER_TEMP/pack.out"
+          TARBALL="$RUNNER_TEMP/release/$(sed -n 's/^filename=//p' "$RUNNER_TEMP/pack.out")"
+          node .release-tools/scripts/release/compare.mjs "$VERIFIED_INTEGRITY" "$(node .release-tools/scripts/release/integrity.mjs "$TARBALL")"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
-          echo "PACK_INTEGRITY=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[0].integrity)' "$RUNNER_TEMP/pack.json")" >> "$GITHUB_ENV"
+          echo "PACKAGE_INTEGRITY=$VERIFIED_INTEGRITY" >> "$GITHUB_ENV"
       # OIDC trusted publishing; no token. No lifecycle scripts run during publish.
       - name: Publish once with provenance
         run: |
+          set -euo pipefail
           if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
-            mkdir -p "$RUNNER_TEMP/registry"
-            npm pack "$PACKAGE_NAME@$PACKAGE_VERSION" --pack-destination "$RUNNER_TEMP/registry" >/dev/null
-            node .release-tools/scripts/release/compare.mjs "$VERIFIED_DIGEST" "$(node .release-tools/scripts/release/digest.mjs "$RUNNER_TEMP"/registry/*.tgz)" \
-              || { echo "$PACKAGE_VERSION is already on npm with different contents"; exit 1; }
-            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published with the verified contents; not publishing again"
+            PUBLISHED=$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity)
+            node .release-tools/scripts/release/compare.mjs "$VERIFIED_INTEGRITY" "$PUBLISHED" \
+              || { echo "$PACKAGE_VERSION is already on npm with a different integrity"; exit 1; }
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published with the verified integrity; not publishing again"
           else
             npm publish "$TARBALL" --provenance --access public --ignore-scripts
-            echo "PACKAGE_INTEGRITY=$PACK_INTEGRITY" >> "$GITHUB_ENV"
           fi
       - name: Verify the public version and provenance
         run: node .release-tools/scripts/release/published.mjs
