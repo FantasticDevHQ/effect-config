@@ -25,6 +25,42 @@
   from Doppler, published on its own subpath so apps that do not use Doppler
   never bundle it.
 
+## Usage
+
+Declare each key once:
+
+```ts
+import { Schema } from "effect"
+import { defineKeys } from "@fantastic.dev/effect-config"
+
+export const keys = defineKeys([
+  { name: "PORT", schema: Schema.Int, required: true, secret: false, consumers: ["api"] },
+  { name: "API_KEY", schema: Schema.String, required: true, secret: true, consumers: ["api", "worker"] },
+  { name: "LOG_LEVEL", schema: Schema.Literals(["debug", "info"]), required: false, secret: false, consumers: ["api"] }
+])
+```
+
+Read it as one typed Effect `Config`:
+
+```ts
+import { Effect } from "effect"
+import { makeConfig } from "@fantastic.dev/effect-config"
+import { keys } from "./keys.ts"
+
+const program = Effect.gen(function*() {
+  const config = yield* makeConfig(keys)
+  config.PORT      // number
+  config.API_KEY   // Redacted<string>, prints as <redacted>
+  config.LOG_LEVEL // Option<"debug" | "info">
+})
+```
+
+- A missing required key fails with a `ConfigError` that names the key.
+- `keyConfig(keys, "API_KEY")` reads a single key. A name the list does not
+  declare is a TypeScript error, and so is `config.UNDECLARED`.
+- The values come from the active `ConfigProvider` (environment variables by
+  default), so tests can swap in `ConfigProvider.fromUnknown(...)`.
+
 ## Requirements
 
 - Node.js 22.18 or later

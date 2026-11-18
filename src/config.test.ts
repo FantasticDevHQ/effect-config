@@ -1,0 +1,211 @@
+import { describe, expect, it } from "@effect/vitest"
+import { ConfigProvider, Effect, Logger, Option, Redacted, Schema } from "effect"
+import { inspect } from "node:util"
+import { keyConfig, makeConfig } from "./config.ts"
+import { keys } from "./fixtures.ts"
+import { defineKeys } from "./keys.ts"
+
+const provider = (env: Record<string, string>) => ConfigProvider.fromEnv({ env })
+
+describe("makeConfig", () => {
+  it.effect("loads values", () =>
+    Effect.gen(function*() {
+      const config = yield* makeConfig(keys).parse(
+        provider({ PORT: "8080", API_KEY: "sk_live_123", LOG_LEVEL: "debug" })
+      )
+      expect(config.PORT).toBe(8080)
+      expect(Redacted.value(config.API_KEY)).toBe("sk_live_123")
+      expect(config.LOG_LEVEL).toEqual(Option.some("debug"))
+    }))
+
+  it.effect("loads an absent optional key as None", () =>
+    Effect.gen(function*() {
+      const config = yield* makeConfig(keys).parse(provider({ PORT: "1", API_KEY: "x" }))
+      expect(Option.isNone(config.LOG_LEVEL)).toBe(true)
+    }))
+
+  it.effect("loads optional secrets as None when absent and Redacted when present", () =>
+    Effect.gen(function*() {
+      const optionalSecret = defineKeys([
+        { name: "TOKEN", schema: Schema.String, required: false, secret: true, consumers: [] }
+      ])
+      const absent = yield* makeConfig(optionalSecret).parse(provider({}))
+      expect(Option.isNone(absent.TOKEN)).toBe(true)
+      const present = yield* makeConfig(optionalSecret).parse(provider({ TOKEN: "tok_1" }))
+      expect(Option.map(present.TOKEN, Redacted.value)).toEqual(Option.some("tok_1"))
+      expect(String(present.TOKEN)).not.toContain("tok_1")
+    }))
+
+  it.effect("reads from the ambient ConfigProvider when yielded", () =>
+    Effect.gen(function*() {
+      const config = yield* makeConfig(keys)
+      expect(config.PORT).toBe(3000)
+    }).pipe(Effect.provide(ConfigProvider.layer(provider({ PORT: "3000", API_KEY: "x" })))))
+
+  it.effect("redacts", () => {
+    const lines: Array<string> = []
+    const capture = Logger.make((options) => {
+      lines.push(Logger.formatSimple.log(options), Logger.formatLogFmt.log(options), Logger.formatJson.log(options))
+    })
+    return Effect.gen(function*() {
+      const config = yield* makeConfig(keys).parse(provider({ PORT: "1", API_KEY: "sk_live_123" }))
+      expect(Redacted.isRedacted(config.API_KEY)).toBe(true)
+      yield* Effect.logInfo("loaded api key", config.API_KEY)
+      yield* Effect.logInfo("loaded config", config)
+      expect(lines.length).toBe(6)
+      for (const line of [...lines, String(config.API_KEY), inspect(config), JSON.stringify(config)]) {
+        expect(line).toContain("<redacted>")
+        expect(line).not.toContain("sk_live_123")
+      }
+    }).pipe(Effect.provide(Logger.layer([capture])))
+  })
+
+  it.effect("missing key", () =>
+    Effect.gen(function*() {
+      const error = yield* Effect.flip(makeConfig(keys).parse(provider({ PORT: "1" })))
+      expect(error._tag).toBe("ConfigError")
+      expect(error.message).toContain("API_KEY")
+    }))
+
+  it.effect("does not echo a rejected secret value, even from a custom schema message", () =>
+    Effect.gen(function*() {
+      const leaky = defineKeys([{
+        name: "TOKEN",
+        schema: Schema.String.check(
+          Schema.makeFilter((value) => value.startsWith("tok_") || `bad token ${value}`)
+        ),
+        required: true,
+        secret: true,
+        consumers: []
+      }])
+      const error = yield* Effect.flip(makeConfig(leaky).parse(provider({ TOKEN: "sk_live_123" })))
+      expect(error.message).toContain("TOKEN")
+      expect(error.message).not.toContain("sk_live_123")
+      expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
+      expect(JSON.stringify(error)).not.toContain("sk_live_123")
+      // A missing secret still reports the key as missing.
+      const missing = yield* Effect.flip(makeConfig(leaky).parse(provider({})))
+      expect(missing.message).toContain("TOKEN")
+    }))
+
+  it.effect("does not pass through a provider error for a secret key", () =>
+    Effect.gen(function*() {
+      let reads = 0
+      const failing = ConfigProvider.make(() => {
+        reads++
+        return Effect.fail(new ConfigProvider.SourceError({ message: "upstream said sk_live_123" }))
+      })
+      const error = yield* Effect.flip(keyConfig(keys, "API_KEY").parse(failing))
+      expect(reads).toBe(1)
+      expect(error.message).toContain("Could not read secret key API_KEY")
+      expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
+      expect(JSON.stringify(error)).not.toContain("sk_live_123")
+    }))
+
+  it.effect("does not load an optional secret as None when the provider fails", () =>
+    Effect.gen(function*() {
+      const optionalSecret = defineKeys([
+        { name: "TOKEN", schema: Schema.String, required: false, secret: true, consumers: [] }
+      ])
+      let reads = 0
+      // Fails first, then would report absence if asked again.
+      const flaky = ConfigProvider.make(() =>
+        reads++ === 0
+          ? Effect.fail(new ConfigProvider.SourceError({ message: "upstream unavailable" }))
+          : Effect.undefined
+      )
+      const error = yield* Effect.flip(makeConfig(optionalSecret).parse(flaky))
+      expect(reads).toBe(1)
+      expect(error.message).toContain("Could not read secret key TOKEN")
+    }))
+
+  it.effect("reads a secret key from the provider exactly once", () =>
+    Effect.gen(function*() {
+      const leaky = defineKeys([{
+        name: "TOKEN",
+        schema: Schema.String.check(Schema.makeFilter((value) => value.startsWith("tok_") || `bad token ${value}`)),
+        required: false,
+        secret: true,
+        consumers: []
+      }])
+      let reads = 0
+      // A rejected value first; absence if the provider were asked again.
+      const changing = ConfigProvider.make(() =>
+        Effect.succeed(reads++ === 0 ? ConfigProvider.makeValue("sk_live_123") : undefined)
+      )
+      const error = yield* Effect.flip(makeConfig(leaky).parse(changing))
+      expect(reads).toBe(1)
+      expect(error.message).toContain("Invalid value for secret key TOKEN")
+      expect(inspect(error, { depth: 30 })).not.toContain("sk_live_123")
+      expect(JSON.stringify(error)).not.toContain("sk_live_123")
+    }))
+
+  it.effect("turns a throwing secret schema into a value-free error", () =>
+    Effect.gen(function*() {
+      const throwing = defineKeys([{
+        name: "TOKEN",
+        schema: Schema.String.check(Schema.makeFilter((value): boolean => {
+          throw new Error(`leaked ${value}`)
+        })),
+        required: true,
+        secret: true,
+        consumers: []
+      }])
+      const exit = yield* Effect.exit(makeConfig(throwing).parse(provider({ TOKEN: "sk_live_123" })))
+      expect(exit._tag).toBe("Failure")
+      expect(inspect(exit, { depth: 30 })).not.toContain("sk_live_123")
+      const error = yield* Effect.flip(makeConfig(throwing).parse(provider({ TOKEN: "sk_live_123" })))
+      expect(error.message).toContain("Invalid value for secret key TOKEN")
+    }))
+
+  it.effect("loads a dynamically named key with the value its type promises", () =>
+    Effect.gen(function*() {
+      const setup = (name: string) =>
+        defineKeys([{ name, schema: Schema.String, required: true, secret: false, consumers: [] }])
+      const value = yield* keyConfig(setup("K"), "K").parse(provider({ K: "actual" }))
+      expect(value).toBe("actual")
+    }))
+
+  it.effect("does not echo an invalid secret value in the error", () =>
+    Effect.gen(function*() {
+      const error = yield* Effect.flip(
+        makeConfig(keys).parse(provider({ PORT: "not-a-number", API_KEY: "sk_live_123", LOG_LEVEL: "nope" }))
+      )
+      expect(error.message).toContain("PORT")
+      expect(inspect(error, { depth: 20 })).not.toContain("sk_live_123")
+    }))
+})
+
+describe("keyConfig", () => {
+  it.effect("loads one declared key", () =>
+    Effect.gen(function*() {
+      const apiKey = yield* keyConfig(keys, "API_KEY").parse(provider({ API_KEY: "secret" }))
+      expect(Redacted.value(apiKey)).toBe("secret")
+    }))
+})
+
+describe("load matrix", () => {
+  const cases = [false, true].flatMap((secret) =>
+    [false, true].flatMap((required) =>
+      (["absent", "valid", "invalid"] as const).map((input) => ({ secret, required, input }))
+    )
+  )
+  it.effect.each(cases)("secret=$secret required=$required $input", ({ input, required, secret }) =>
+    Effect.gen(function*() {
+      const list = defineKeys([{ name: "K", schema: Schema.Int, required, secret, consumers: [] }])
+      const env: Record<string, string> = input === "absent" ? {} : { K: input === "valid" ? "42" : "nope" }
+      const result = yield* Effect.result(makeConfig(list).parse(provider(env)))
+      if (input === "invalid" || (input === "absent" && required)) {
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") expect(result.failure.message).toContain("K")
+        return
+      }
+      expect(result._tag).toBe("Success")
+      if (result._tag !== "Success") return
+      const raw: unknown = result.success.K
+      const unwrapped = required ? raw : Option.getOrUndefined(raw as Option.Option<unknown>)
+      if (input === "absent") return expect(Option.isNone(raw as Option.Option<unknown>)).toBe(true)
+      expect(secret ? Redacted.value(unwrapped as Redacted.Redacted<number>) : unwrapped).toBe(42)
+    }))
+})
+

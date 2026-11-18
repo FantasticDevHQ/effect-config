@@ -45,7 +45,8 @@
     "test": "vitest run",
     "test:pr-standard": "node --test scripts/pr-standard.test.mjs scripts/enforce-pr-standard.test.mjs",
     "test:repo": "node --test scripts/repository.test.mjs",
-    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm test:pr-standard && pnpm test:repo"
+    "check": "pnpm typecheck && pnpm test && pnpm test:types && pnpm build && pnpm test:pr-standard && pnpm test:repo",
+    "test:types": "vitest run --typecheck.only"
   },
   "peerDependencies": {
     "effect": "^4.1.4"
