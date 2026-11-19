@@ -1,5 +1,6 @@
 name: Release
-# Publishes @fantastic.dev/effect-config to npm when a v<semver> tag is pushed.
+# Maintains auto-merging release PRs on main and publishes their tags in the same run.
+# Manual v<semver> tags and existing-tag recovery remain supported.
 # Verify runs on UbiCloud. Only Publish runs on a GitHub-hosted runner: an
 # owner-approved exception (2026-11-18, FORG-155), because npm trusted
 # publishing and provenance reject self-hosted runners. Publish builds the tag
@@ -7,12 +8,13 @@ name: Release
 # integrity of the tarball verified on UbiCloud. See docs/releasing.md.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       release_tag:
         description: Existing v<semver> tag to verify and publish (recovery). Run from main.
-        required: true
+        required: false
         type: string
 permissions:
   contents: read
@@ -21,10 +23,77 @@ concurrency:
   cancel-in-progress: false
 env:
   PACKAGE_NAME: "@fantastic.dev/effect-config"
-  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 jobs:
+  release-please:
+    name: Release PR
+    if: github.ref == 'refs/heads/main' && inputs.release_tag == ''
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: write # tag and GitHub release
+      issues: write # release labels
+      pull-requests: write # the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # Releases and tags use GITHUB_TOKEN on purpose: its events do not trigger workflows, so
+      # the v* tag push cannot start a second publish below.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-pull-request: true
+      # The release PR uses the org-wide release GitHub App, so it triggers CI like any other PR
+      # and can satisfy the required checks on main.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release-pr
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-release: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release-pr.outputs.prs_created == 'true'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        if: steps.release-pr.outputs.prs_created == 'true'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.release-pr.outputs.prs_created == 'true'
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - name: Verify source and prepare the generated release PR
+        if: steps.release-pr.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
+        run: |
+          echo "runner.name=$RUNNER_NAME"
+          pnpm install --frozen-lockfile
+          pnpm check
+          node scripts/release/automation.mjs
+
   verify:
     name: Verify release
+    needs: release-please
+    if: >-
+      always() && !cancelled() &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       (startsWith(github.ref, 'refs/tags/v') && needs.release-please.result == 'skipped') ||
+       (github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'v')))
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name || github.ref_name }}
     runs-on: ubicloud-standard-2-ubuntu-2404
     timeout-minutes: 15
     outputs:
@@ -35,9 +104,11 @@ jobs:
       - name: Resolve the release tag
         run: |
           echo "runner.name=$RUNNER_NAME"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            test "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" || { echo "Push a v<semver> tag"; exit 1; }
-          fi
+          # The source event may be a main push that just created a release.
+          # Check the selected tag, not the event ref; exact semver/version
+          # validation follows in the tag check after checkout.
+          test -n "$RELEASE_TAG" && test "${RELEASE_TAG#v}" != "$RELEASE_TAG" \
+            || { echo "Select a v<semver> release tag"; exit 1; }
           echo "Releasing $RELEASE_TAG"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,7 +150,8 @@ jobs:
 
   publish:
     name: Publish
-    needs: verify
+    needs: [release-please, verify]
+    if: always() && !cancelled() && needs.verify.result == 'success'
     # Owner-approved exception: npm trusted publishing and provenance need a cloud-hosted runner.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -88,6 +160,7 @@ jobs:
       contents: write
       id-token: write
     env:
+      RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name || github.ref_name }}
       PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
       VERIFIED_INTEGRITY: ${{ needs.verify.outputs.integrity }}
       VERIFIED_SHA: ${{ needs.verify.outputs.sha }}
