@@ -104,9 +104,11 @@ jobs:
       - name: Resolve the release tag
         run: |
           echo "runner.name=$RUNNER_NAME"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            test "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" || { echo "Push a v<semver> tag"; exit 1; }
-          fi
+          # The source event may be a main push that just created a release.
+          # Check the selected tag, not the event ref; exact semver/version
+          # validation follows in the tag check after checkout.
+          test -n "$RELEASE_TAG" && test "${RELEASE_TAG#v}" != "$RELEASE_TAG" \
+            || { echo "Select a v<semver> release tag"; exit 1; }
           echo "Releasing $RELEASE_TAG"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

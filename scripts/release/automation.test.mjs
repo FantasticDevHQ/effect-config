@@ -77,3 +77,14 @@ test("workflow routes main maintenance, generated releases, manual tags and reco
     assert.equal(evaluate({ ref, event_name: event }, { release_tag: tag }, { "release-please": { result, outputs: { release_created: created } } }, () => true, () => false, (s, prefix) => s.startsWith(prefix)), expected)
   }
 })
+
+test("release source step accepts same-run main releases as well as manual tags and recovery", async () => {
+  const { readFileSync } = await import("node:fs")
+  const { spawnSync } = await import("node:child_process")
+  const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")
+  const shell = workflow.match(/- name: Resolve the release tag\n        run: \|\n([\s\S]*?)\n      - uses:/)[1].replace(/^          /gm, "")
+  for (const [event, ref] of [["push", "refs/heads/main"], ["push", "refs/tags/v0.1.1"], ["workflow_dispatch", "refs/heads/main"]]) {
+    const result = spawnSync("bash", ["-e", "-c", shell], { encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, RELEASE_TAG: "v0.1.1", RUNNER_NAME: "fixture" } })
+    assert.equal(result.status, 0, `${event} ${ref}: ${result.stdout} ${result.stderr}`)
+  }
+})
