@@ -4,17 +4,43 @@ Releases publish `@fantastic.dev/effect-config` to npm from
 `.github/workflows/release.yml`, with npm provenance. Nobody publishes from a
 laptop.
 
-## Cut a release
+## Automatic releases
 
-1. In a PR, set `version` in `package.json` and add a `CHANGELOG.md` entry.
-2. Push the tag `v<version>` on the reviewed commit:
+Release Please maintains a release PR on every push to `main`, starting from
+published `v0.1.0`. Use Conventional Commit PR titles with the owning ticket:
+`fix: FORG-123 correct config errors`, `feat: FORG-123 add a capability`, or
+`ci: FORG-123 improve checks`. Fixes produce patches; features produce minor
+releases. Breaking changes produce minor releases before 1.0. Maintenance and
+documentation commits are included too, matching the organization release policy.
+Do not manually bump `package.json`, `.release-please-manifest.json` or the
+changelog during ordinary development.
 
-   ```sh
-   git tag v0.1.0 <commit>
-   git push origin v0.1.0
-   ```
+The release PR uses the organization `fantasticdev-npm-releases` GitHub App so
+its events trigger normal CI. The workflow verifies the source with `pnpm check`,
+adds the five required PR sections with its actual Actions run identity and proof,
+and preserves the generated version notes between standalone `---` delimiters.
+Keep these boundaries intact; add review evidence in comments. Release PRs relate
+to the automation setup ticket rather than closing it again.
 
-3. The `Release` workflow runs:
+Auto-merge uses squash and matches the current PR head. GitHub waits for the
+required `PR standard` and `Repository quality gates` checks. The helper retries
+only explicit stale-head errors, revalidating the same branch each time; all
+other errors fail. The implementation PR still requires the owner's merge approval.
+Once approved and merged, future generated release PRs auto-merge after checks.
+
+After a release PR merges, Release Please creates the tag and GitHub release
+with `GITHUB_TOKEN`. That token's tag events do not start workflows, so the same
+run passes the created tag to Verify and then Publish. Ordinary main pushes
+without a created release skip those jobs. Never use a successful maintenance run
+with Publish skipped as proof of publication.
+
+## Manual tags and publication gates
+
+Manual `v<version>` tags remain supported for exceptional releases. First review
+the version and changelog changes in a PR, then push the tag on the reviewed
+commit. Do not publish from a laptop.
+
+The `Release` workflow runs:
    - **Verify release** (`ubicloud-standard-2-ubuntu-2404`) checks out the
      tag, runs `pnpm check`, then checks that the tag equals `v` +
      `package.json` version and that `CHANGELOG.md` has that version. It packs
@@ -58,6 +84,15 @@ provenance reject self-hosted runners
 [provenance](https://docs.npmjs.com/generating-provenance-statements/)).
 The owner approved this exception for the Publish job only (FORG-155).
 `scripts/repository.test.mjs` fails if any other job leaves UbiCloud.
+
+## Release App configuration
+
+The organization App installation must include this repository. The organization
+variable `RELEASE_APP_CLIENT_ID` and selected secret `RELEASE_APP_PRIVATE_KEY`
+must be available here; the App needs contents, pull-request and issue write
+permissions. Repository auto-merge must be enabled. Keep required checks active
+without App bypasses. Only the Publish job uses the existing approved hosted
+runner exception; maintenance and verification run on UbiCloud.
 
 ## Authentication
 
