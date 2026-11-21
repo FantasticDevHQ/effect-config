@@ -209,10 +209,17 @@ const program = makeConfig(keys).pipe(Effect.provide(ConfigLive))
 
 ## Contributing
 
-Source development needs Node.js 22.18 or later and pnpm 10.
+Contributions are welcome. Read the
+[contributing guide](https://github.com/FantasticDevHQ/.github/blob/main/CONTRIBUTING.md)
+and [Code of Conduct](https://github.com/FantasticDevHQ/.github/blob/main/CODE_OF_CONDUCT.md),
+and report vulnerabilities privately as described in the
+[security policy](https://github.com/FantasticDevHQ/.github/blob/main/SECURITY.md).
+
+Source development needs Node.js 22.18 or later and pnpm 10 (`packageManager`
+pins pnpm 10.12.3).
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm check   # typecheck, build, tests, type tests, PR-standard, repository and release tests
 ```
 
