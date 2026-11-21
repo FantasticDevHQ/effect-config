@@ -22,6 +22,17 @@ and preserves the generated version notes between standalone `---` delimiters.
 Keep these boundaries intact; add review evidence in comments. Release PRs relate
 to the automation setup ticket rather than closing it again.
 
+Release PRs meet the PR standard with no bot exemption, including its commit
+ticket rule. Whenever Release Please creates or updates the release PR
+(`prs_created`), the workflow checks out the release branch with the App token
+and `scripts/release/automation.mjs` amends the release commit so its body ends
+with `No-ticket: automated release`. It skips commits that already have the
+footer and keeps the author and subject. It validates the body and footed
+commit, writes the body first (so every check on the final head sees it), then
+force-pushes with a lease using the App token, so CI runs on the new head, and
+enables auto-merge on that fresh head. `pnpm check` runs before the App token is
+exposed to any step.
+
 Auto-merge uses squash and matches the current PR head. GitHub waits for the
 required `PR standard` and `Repository quality gates` checks. The helper retries
 only explicit stale-head errors, revalidating the same branch each time; all

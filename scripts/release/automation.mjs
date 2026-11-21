@@ -67,6 +67,43 @@ export async function enableReleaseAutoMerge({
   }
 }
 
+export const footer = "No-ticket: automated release"
+export const hasTicketFooter = (message) => /^No-ticket:[ \t]*\S/m.test(message ?? "")
+
+/** The commit message with the footer appended as its last line. */
+export function withTicketFooter(message) {
+  if (hasTicketFooter(message)) return message
+  return `${message.replace(/\s+$/, "")}\n\n${footer}\n`
+}
+
+const git = (cwd, env = {}) => async (args) => (await execute("git", args, { cwd, env: { ...process.env, ...env } })).stdout
+
+/**
+ * Release PRs get no validator exemption, so the generated release commit must
+ * carry a ticket footer. Amend the head commit of the checked-out release branch
+ * so its body ends with `No-ticket: automated release` (skipped when present),
+ * keeping author, dates and subject so a rerun yields the same commit, then
+ * force-push it with a lease. Returns the head SHA and its message.
+ */
+export async function amendReleaseCommit({ dir, branch, remote = "origin", env = {} }) {
+  if (!/^release-please--[\w@./-]+$/.test(branch ?? "")) throw new Error(`Refusing to amend a non-release branch: ${branch}`)
+  const run = git(dir, env)
+  const head = (await run(["rev-parse", "HEAD"])).trim()
+  const message = await run(["log", "-1", "--format=%B", head])
+  if (hasTicketFooter(message)) return { sha: head, message, amended: false }
+  const [name, email, authorDate, committerDate] = (await run(["log", "-1", "--format=%an%x00%ae%x00%aI%x00%cI", head])).trim().split("\0")
+  const dirName = mkdtempSync(join(tmpdir(), "release-commit-"))
+  try {
+    writeFileSync(join(dirName, "message"), withTicketFooter(message))
+    await git(dir, { ...env, GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: authorDate, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email, GIT_COMMITTER_DATE: committerDate })(["commit", "--amend", "--no-verify", "--allow-empty", "--cleanup=verbatim", "-F", join(dirName, "message")])
+  } finally {
+    rmSync(dirName, { recursive: true, force: true })
+  }
+  const sha = (await run(["rev-parse", "HEAD"])).trim()
+  await run(["push", `--force-with-lease=refs/heads/${branch}:${head}`, remote, `${sha}:refs/heads/${branch}`])
+  return { sha, message: withTicketFooter(message), amended: true }
+}
+
 export function releaseBody({ body, repository, runId, attempt, sha }) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") || !/^\d+$/.test(runId ?? "") || !/^\d+$/.test(attempt ?? "") || !/^[0-9a-f]{40}$/.test(sha ?? "")) throw new Error("Valid automation identity is required")
   const parts = body.replace(/\r\n/g, "\n").split(/^---$/m)
@@ -117,12 +154,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (!Number.isSafeInteger(pr?.number) || pr.number <= 0) throw new Error("Release PR number is required")
     const current = JSON.parse(await command(["api", `repos/${repository}/pulls/${pr.number}`]))
     if (current.state !== "open" || current.base?.ref !== "main" || current.base.repo?.full_name !== repository || current.head.repo?.full_name !== repository || !current.head.ref?.startsWith("release-please--")) throw new Error("Unexpected generated release PR")
+    if (current.head.ref !== pr.headBranchName) throw new Error("Unexpected generated release branch")
+    const checkout = process.argv[2]
+    if (!checkout) throw new Error("Release branch checkout directory is required")
+    const message = withTicketFooter(await git(checkout)(["log", "-1", "--format=%B", "HEAD"]))
     const body = releaseBody({ body: current.body, repository, runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, sha: process.env.GITHUB_SHA })
-    const errors = validatePullRequest({ title: current.title, body })
+    const errors = validatePullRequest({ title: current.title, body }, [], [{ sha: current.head.sha, message }])
     if (errors.length) throw new Error(errors.join("\n"))
+    // Edit the body before pushing, so every check run on the final head sees it.
     const file = join(dir, "body.md")
     writeFileSync(file, body)
     await command(["pr", "edit", String(pr.number), "--repo", repository, "--body-file", file])
+    // The release branch checkout dropped its credentials; pass the App token for this push only.
+    const basic = Buffer.from(`x-access-token:${process.env.GH_TOKEN}`).toString("base64")
+    const commit = await amendReleaseCommit({ dir: checkout, branch: current.head.ref, env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}` } })
+    console.log(commit.amended ? `Amended and pushed release commit ${commit.sha}` : `Release commit ${commit.sha} already has the footer`)
     console.log(`Release auto-merge: ${await enableReleaseAutoMerge({ repository, prNumber: pr.number })}`)
   } catch (error) {
     console.error(error.message)

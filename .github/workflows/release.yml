@@ -73,16 +73,32 @@ jobs:
         with:
           node-version: 22.22.0
           cache: pnpm
-      - name: Verify source and prepare the generated release PR
+      - name: Verify source
         if: steps.release-pr.outputs.prs_created == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
         run: |
           echo "runner.name=$RUNNER_NAME"
           pnpm install --frozen-lockfile
           pnpm check
-          node scripts/release/automation.mjs
+      # `prs_created` is true whenever Release Please created or updated the
+      # release PR (it rewrites the branch and body on every update). Release
+      # PRs meet the PR standard with no bot exemption: the automation amends
+      # the release commit with a `No-ticket: automated release` footer,
+      # force-pushes it with a lease using the App token (so CI runs on the new
+      # head), writes the required sections, then enables auto-merge.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release-pr.outputs.prs_created == 'true'
+        with:
+          ref: ${{ fromJSON(steps.release-pr.outputs.pr).headBranchName }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: .release-pr
+          fetch-depth: 2 # the release commit and its parent, for the amend
+          persist-credentials: false
+      - name: Prepare the generated release PR
+        if: steps.release-pr.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
+        run: node scripts/release/automation.mjs .release-pr
 
   verify:
     name: Verify release
