@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.2](https://github.com/FantasticDevHQ/effect-config/compare/v0.1.1...v0.1.2) (2026-11-21)
+
+
+### Documentation
+
+* **community:** adopt organization community health defaults ([#11](https://github.com/FantasticDevHQ/effect-config/issues/11)) ([b79a42e](https://github.com/FantasticDevHQ/effect-config/commit/b79a42ecc7013824cc49859a5e58ef175efd975f))
+
+
+### Continuous Integration
+
+* **release:** OSS-43 make release PRs meet the PR standard ([#14](https://github.com/FantasticDevHQ/effect-config/issues/14)) ([b1835d5](https://github.com/FantasticDevHQ/effect-config/commit/b1835d5ddb2c60799985b28a79c295c5e202b986))
+
 ## [0.1.1](https://github.com/FantasticDevHQ/effect-config/compare/v0.1.0...v0.1.1) (2026-11-19)
 
 
