@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/FantasticDevHQ/effect-config/compare/v0.1.2...v0.1.3) (2026-11-21)
+
+
+### Continuous Integration
+
+* **standards:** add the issue standard workflow ([#13](https://github.com/FantasticDevHQ/effect-config/issues/13)) ([c41ac87](https://github.com/FantasticDevHQ/effect-config/commit/c41ac879030788a60548107e5081d74e4a205a00))
+
 ## [0.1.2](https://github.com/FantasticDevHQ/effect-config/compare/v0.1.1...v0.1.2) (2026-11-21)
 
 

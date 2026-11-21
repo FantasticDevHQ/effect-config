@@ -1,6 +1,6 @@
 {
   "name": "@fantastic.dev/effect-config",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Typed configuration keys for Effect: one key list, Effect Config, drift checks and an optional Doppler ConfigProvider.",
   "type": "module",
   "license": "MIT",
