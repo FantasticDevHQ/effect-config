@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/FantasticDevHQ/effect-config/compare/v0.1.3...v0.1.4) (2026-11-21)
+
+
+### Continuous Integration
+
+* **standards:** add the PR standard re-run workflow ([#16](https://github.com/FantasticDevHQ/effect-config/issues/16)) ([7899175](https://github.com/FantasticDevHQ/effect-config/commit/7899175ca1a4090cf19ca65324a1be7b1aa15f64))
+
 ## [0.1.3](https://github.com/FantasticDevHQ/effect-config/compare/v0.1.2...v0.1.3) (2026-11-21)
 
 
